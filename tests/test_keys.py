@@ -7,7 +7,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from ebicsclient import keys
-from ebicsclient.errors import KeyringError
+from ebicsclient.errors import KeyringDecryptionError, KeyringError, KeyringFormatError
 from ebicsclient.models import Keyring
 
 _PASSPHRASE = "correct horse battery staple"
@@ -75,15 +75,29 @@ def test_serialize_keyring_rejects_an_empty_passphrase(keyring: Keyring) -> None
         keys.serialize_keyring(keyring, passphrase="")
 
 
-def test_deserialize_keyring_with_wrong_passphrase_raises(keyring: Keyring) -> None:
+def test_deserialize_keyring_with_wrong_passphrase_raises_decryption_error(
+    keyring: Keyring,
+) -> None:
     data = keys.serialize_keyring(keyring, passphrase=_PASSPHRASE)
-    with pytest.raises(KeyringError):
+    with pytest.raises(KeyringDecryptionError):
         keys.deserialize_keyring(data, passphrase="wrong passphrase")
 
 
-def test_deserialize_keyring_rejects_malformed_data() -> None:
-    with pytest.raises(KeyringError):
+def test_deserialize_keyring_rejects_malformed_data_with_format_error() -> None:
+    with pytest.raises(KeyringFormatError):
         keys.deserialize_keyring(b"not json at all", passphrase=_PASSPHRASE)
+
+
+def test_deserialize_keyring_rejects_unknown_format_version() -> None:
+    with pytest.raises(KeyringFormatError):
+        keys.deserialize_keyring(b'{"version": 999, "keys": {}}', passphrase=_PASSPHRASE)
+
+
+def test_keyring_error_subclasses_stay_catchable_as_the_base(keyring: Keyring) -> None:
+    # Callers that only care about "some keyring problem" can still catch the base.
+    data = keys.serialize_keyring(keyring, passphrase=_PASSPHRASE)
+    with pytest.raises(KeyringError):
+        keys.deserialize_keyring(data, passphrase="wrong passphrase")
 
 
 def test_save_and_load_keyring_round_trip_through_a_file(keyring: Keyring, tmp_path: Path) -> None:

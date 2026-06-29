@@ -17,6 +17,23 @@ class KeyringError(CryptoError):
     """The keyring could not be created, serialised, written, read, or decrypted."""
 
 
+class KeyringFormatError(KeyringError):
+    """The serialised keyring is structurally invalid.
+
+    Raised when the data is not valid JSON, carries an unknown format version, or is
+    missing keys (or holds a non-RSA key). Re-trying with a different passphrase will
+    not help — the bytes are not a well-formed keyring.
+    """
+
+
+class KeyringDecryptionError(KeyringError):
+    """The keyring could not be decrypted.
+
+    Usually a wrong passphrase; possibly corrupt key material. The two cannot be told
+    apart reliably, because the underlying crypto layer reports both the same way.
+    """
+
+
 class TransportError(EbicsError):
     """The HTTP exchange with the bank failed (connection, TLS, status code)."""
 

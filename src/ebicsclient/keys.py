@@ -23,7 +23,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from ebicsclient.errors import KeyringError
+from ebicsclient.errors import KeyringDecryptionError, KeyringError, KeyringFormatError
 from ebicsclient.models import Keyring
 
 logger = logging.getLogger(__name__)
@@ -123,15 +123,15 @@ def deserialize_keyring(data: bytes, passphrase: str) -> Keyring:
     try:
         envelope = json.loads(data)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise KeyringError(f"Keyring data is not valid JSON: {error}") from error
+        raise KeyringFormatError(f"Keyring data is not valid JSON: {error}") from error
 
     if not isinstance(envelope, dict):
-        raise KeyringError("Keyring data is not a JSON object")
+        raise KeyringFormatError("Keyring data is not a JSON object")
     if envelope.get("version") != _KEYRING_FORMAT_VERSION:
-        raise KeyringError(f"Unsupported keyring format version: {envelope.get('version')!r}")
+        raise KeyringFormatError(f"Unsupported keyring format version: {envelope.get('version')!r}")
     encoded = envelope.get("keys")
     if not isinstance(encoded, dict) or any(field not in encoded for field in _KEY_FIELDS):
-        raise KeyringError("Keyring data is missing one or more keys")
+        raise KeyringFormatError("Keyring data is missing one or more keys")
 
     secret = passphrase.encode("utf-8")
     keys = {field: _private_key_from_pem(encoded[field], secret) for field in _KEY_FIELDS}
@@ -202,10 +202,10 @@ def _private_key_from_pem(pem: str, passphrase: bytes) -> rsa.RSAPrivateKey:
     try:
         key = serialization.load_pem_private_key(pem.encode("ascii"), password=passphrase)
     except ValueError as error:
-        # A wrong passphrase and corrupt data both surface here as ValueError.
-        raise KeyringError(
-            "Could not decrypt the keyring — wrong passphrase or corrupt file"
+        # A wrong passphrase and corrupt key material both surface here as ValueError.
+        raise KeyringDecryptionError(
+            "Could not decrypt the keyring — wrong passphrase or corrupt key material"
         ) from error
     if not isinstance(key, rsa.RSAPrivateKey):
-        raise KeyringError("Keyring contains a key that is not an RSA private key")
+        raise KeyringFormatError("Keyring contains a key that is not an RSA private key")
     return key
