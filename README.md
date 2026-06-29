@@ -13,13 +13,12 @@ Kantonalbank (ZKB).
 
 ## Why this exists
 
-ZKB (and the CH/DE EBICS world) forces **EBICS 3.0 / H005** (pre-3.0 retired ~Nov 2025), and the
-**ISO 20022 "2009" message vintage retires 21 Nov 2026** → we must speak H005 and produce/consume
-**camt.053.001.08** (the 2019 vintage). The only fully-free existing Python option (`fintech`) blocks
-statements from the last 3 days unless you pay. The free, full options are PHP/Java. Rather than run a
-foreign-runtime sidecar in a Python stack — or pay — we implement a tightly-scoped client ourselves.
-EBICS is a stable, formally-versioned standard, so a scoped client is **low ongoing maintenance**; the
-cost is upfront correctness. See [docs/03-library-landscape.md](docs/03-library-landscape.md).
+EBICS access now requires **EBICS 3.0 / H005** (the pre-3.0 protocol was retired ~Nov 2025), and the
+ISO 20022 "2009" message vintage retires **21 Nov 2026** — so a client must speak H005 and consume
+**camt.053.001.08** (the 2019 vintage). There is no pure-Python client for this. We build one, kept
+tightly scoped. EBICS is a stable, formally versioned standard, so a scoped client is **low ongoing
+maintenance** — the cost is upfront correctness. See
+[docs/03-library-landscape.md](docs/03-library-landscape.md) for the landscape.
 
 ## Documentation index
 
