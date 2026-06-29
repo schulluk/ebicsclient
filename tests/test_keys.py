@@ -1,4 +1,4 @@
-"""Tests for ebicsclient.keys: keyring generation, persistence, and public-key hashes."""
+"""Tests for ebicsclient.keys: keyring generation, serialisation, and public-key hashes."""
 
 import hashlib
 from pathlib import Path
@@ -17,6 +17,13 @@ _PASSPHRASE = "correct horse battery staple"
 def keyring() -> Keyring:
     """A real 2048-bit keyring, generated once for the module."""
     return keys.generate_keyring()
+
+
+def _assert_same_public_keys(left: Keyring, right: Keyring) -> None:
+    for field in ("signature", "authentication", "encryption"):
+        a = getattr(left, field).public_key().public_numbers()
+        b = getattr(right, field).public_key().public_numbers()
+        assert (a.e, a.n) == (b.e, b.n)
 
 
 def test_generate_keyring_produces_three_distinct_2048_bit_keys(keyring: Keyring) -> None:
@@ -51,33 +58,40 @@ def test_public_key_hash_is_sha256_of_the_fingerprint(keyring: Keyring) -> None:
     assert len(digest) == 32
 
 
-def test_keyring_round_trips_through_an_encrypted_file(keyring: Keyring, tmp_path: Path) -> None:
-    path = tmp_path / "keyring.json"
-    keys.save_keyring(keyring, path, passphrase=_PASSPHRASE)
-    loaded = keys.load_keyring(path, passphrase=_PASSPHRASE)
-    for field in ("signature", "authentication", "encryption"):
-        original = getattr(keyring, field).public_key().public_numbers()
-        restored = getattr(loaded, field).public_key().public_numbers()
-        assert (original.e, original.n) == (restored.e, restored.n)
+def test_keyring_round_trips_in_memory(keyring: Keyring) -> None:
+    data = keys.serialize_keyring(keyring, passphrase=_PASSPHRASE)
+    assert isinstance(data, bytes)
+    _assert_same_public_keys(keys.deserialize_keyring(data, passphrase=_PASSPHRASE), keyring)
 
 
-def test_saved_keyring_does_not_contain_plaintext_key_material(
-    keyring: Keyring, tmp_path: Path
-) -> None:
-    path = tmp_path / "keyring.json"
-    keys.save_keyring(keyring, path, passphrase=_PASSPHRASE)
-    contents = path.read_text(encoding="utf-8")
-    assert "ENCRYPTED PRIVATE KEY" in contents
-    assert "BEGIN PRIVATE KEY" not in contents  # never unencrypted
+def test_serialized_keyring_contains_only_encrypted_key_material(keyring: Keyring) -> None:
+    data = keys.serialize_keyring(keyring, passphrase=_PASSPHRASE)
+    assert b"ENCRYPTED PRIVATE KEY" in data
+    assert b"BEGIN PRIVATE KEY" not in data  # never an unencrypted key
 
 
-def test_load_keyring_with_wrong_passphrase_raises(keyring: Keyring, tmp_path: Path) -> None:
-    path = tmp_path / "keyring.json"
-    keys.save_keyring(keyring, path, passphrase=_PASSPHRASE)
+def test_serialize_keyring_rejects_an_empty_passphrase(keyring: Keyring) -> None:
     with pytest.raises(KeyringError):
-        keys.load_keyring(path, passphrase="wrong passphrase")
+        keys.serialize_keyring(keyring, passphrase="")
 
 
-def test_save_keyring_rejects_an_empty_passphrase(keyring: Keyring, tmp_path: Path) -> None:
+def test_deserialize_keyring_with_wrong_passphrase_raises(keyring: Keyring) -> None:
+    data = keys.serialize_keyring(keyring, passphrase=_PASSPHRASE)
     with pytest.raises(KeyringError):
-        keys.save_keyring(keyring, tmp_path / "keyring.json", passphrase="")
+        keys.deserialize_keyring(data, passphrase="wrong passphrase")
+
+
+def test_deserialize_keyring_rejects_malformed_data() -> None:
+    with pytest.raises(KeyringError):
+        keys.deserialize_keyring(b"not json at all", passphrase=_PASSPHRASE)
+
+
+def test_save_and_load_keyring_round_trip_through_a_file(keyring: Keyring, tmp_path: Path) -> None:
+    path = tmp_path / "keyring.json"
+    keys.save_keyring(keyring, path, passphrase=_PASSPHRASE)
+    _assert_same_public_keys(keys.load_keyring(path, passphrase=_PASSPHRASE), keyring)
+
+
+def test_load_keyring_from_a_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(KeyringError):
+        keys.load_keyring(tmp_path / "does-not-exist.json", passphrase=_PASSPHRASE)

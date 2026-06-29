@@ -1,9 +1,15 @@
-"""RSA key-pair generation, keyring persistence, and EBICS public-key hashes.
+"""RSA key-pair generation, keyring serialisation, and EBICS public-key hashes.
 
 A subscriber's three RSA key pairs (A006 signature, X002 authentication, E002
-encryption) are generated here, persisted to an encrypted keyring file, and reduced
+encryption) are generated here, serialised to an encrypted byte string, and reduced
 to the SHA-256 public-key hashes that appear on the initialisation letter and are
 checked when the bank's keys are retrieved (HPB).
+
+Serialisation is kept separate from storage: :func:`serialize_keyring` /
+:func:`deserialize_keyring` move between a keyring and encrypted bytes, and the caller
+decides where those bytes live — a file, a database column, a secrets manager, memory.
+:func:`save_keyring` / :func:`load_keyring` are thin file conveniences over them, for
+the common case; they are optional, and the library never forces key material onto disk.
 
 Security: the keyring is encrypted at rest with a caller-supplied passphrase that is
 never stored or logged. See docs/06-engineering-conventions.md.
@@ -25,7 +31,7 @@ logger = logging.getLogger(__name__)
 # EBICS H005 requires RSA keys of at least 2048 bits; 65537 is the standard exponent.
 _MINIMUM_KEY_SIZE = 2048
 _PUBLIC_EXPONENT = 65537
-_KEYRING_FILE_VERSION = 1
+_KEYRING_FORMAT_VERSION = 1
 _KEY_FIELDS = ("signature", "authentication", "encryption")
 
 
@@ -72,11 +78,68 @@ def public_key_hash(public_key: rsa.RSAPublicKey) -> bytes:
     return hashlib.sha256(_fingerprint_data(public_key.public_numbers())).digest()
 
 
-def save_keyring(keyring: Keyring, path: Path, passphrase: str) -> None:
-    """Encrypt a keyring and write it to disk.
+def serialize_keyring(keyring: Keyring, passphrase: str) -> bytes:
+    """Serialise and encrypt a keyring into a portable byte string.
 
-    Each private key is serialised as a PKCS#8 PEM encrypted with the passphrase, and
-    the three are stored together in a small JSON envelope.
+    Each private key is encoded as a PKCS#8 PEM encrypted with the passphrase, and the
+    three are wrapped in a small JSON envelope. The caller decides where the returned
+    bytes are stored — a file, a database column, a secrets manager — so the library
+    never imposes a storage mechanism.
+
+    Args:
+        keyring: The key pairs to serialise.
+        passphrase: Secret used to encrypt the private keys. Never stored or logged.
+
+    Returns:
+        The encrypted keyring as a UTF-8 encoded JSON byte string.
+
+    Raises:
+        KeyringError: the passphrase is empty.
+    """
+    if not passphrase:
+        raise KeyringError("A non-empty passphrase is required to encrypt the keyring")
+    encryption = serialization.BestAvailableEncryption(passphrase.encode("utf-8"))
+    encoded = {
+        field: _private_key_to_pem(getattr(keyring, field), encryption) for field in _KEY_FIELDS
+    }
+    envelope = {"version": _KEYRING_FORMAT_VERSION, "keys": encoded}
+    return json.dumps(envelope, indent=2).encode("utf-8")
+
+
+def deserialize_keyring(data: bytes, passphrase: str) -> Keyring:
+    """Decrypt and reconstruct a keyring serialised by :func:`serialize_keyring`.
+
+    Args:
+        data: The encrypted keyring bytes.
+        passphrase: Secret used when the keyring was serialised.
+
+    Returns:
+        The decrypted keyring.
+
+    Raises:
+        KeyringError: the data is malformed, of an unknown version, or the passphrase
+            is wrong.
+    """
+    try:
+        envelope = json.loads(data)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise KeyringError(f"Keyring data is not valid JSON: {error}") from error
+
+    if not isinstance(envelope, dict):
+        raise KeyringError("Keyring data is not a JSON object")
+    if envelope.get("version") != _KEYRING_FORMAT_VERSION:
+        raise KeyringError(f"Unsupported keyring format version: {envelope.get('version')!r}")
+    encoded = envelope.get("keys")
+    if not isinstance(encoded, dict) or any(field not in encoded for field in _KEY_FIELDS):
+        raise KeyringError("Keyring data is missing one or more keys")
+
+    secret = passphrase.encode("utf-8")
+    keys = {field: _private_key_from_pem(encoded[field], secret) for field in _KEY_FIELDS}
+    return Keyring(**keys)
+
+
+def save_keyring(keyring: Keyring, path: Path, passphrase: str) -> None:
+    """Write an encrypted keyring to a file (convenience over :func:`serialize_keyring`).
 
     Args:
         keyring: The key pairs to persist.
@@ -86,22 +149,16 @@ def save_keyring(keyring: Keyring, path: Path, passphrase: str) -> None:
     Raises:
         KeyringError: the passphrase is empty, or the file could not be written.
     """
-    if not passphrase:
-        raise KeyringError("A non-empty passphrase is required to encrypt the keyring")
-    encryption = serialization.BestAvailableEncryption(passphrase.encode("utf-8"))
+    data = serialize_keyring(keyring, passphrase)
     try:
-        encoded = {
-            field: _private_key_to_pem(getattr(keyring, field), encryption) for field in _KEY_FIELDS
-        }
-        envelope = {"version": _KEYRING_FILE_VERSION, "keys": encoded}
-        path.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
+        path.write_bytes(data)
     except OSError as error:
         raise KeyringError(f"Could not write keyring to {path}: {error}") from error
     logger.info("Wrote encrypted keyring to %s", path)
 
 
 def load_keyring(path: Path, passphrase: str) -> Keyring:
-    """Load and decrypt a keyring written by :func:`save_keyring`.
+    """Read and decrypt a keyring file (convenience over :func:`deserialize_keyring`).
 
     Args:
         path: Path to the encrypted keyring file.
@@ -115,21 +172,10 @@ def load_keyring(path: Path, passphrase: str) -> Keyring:
             passphrase is wrong.
     """
     try:
-        envelope = json.loads(path.read_text(encoding="utf-8"))
+        data = path.read_bytes()
     except OSError as error:
         raise KeyringError(f"Could not read keyring from {path}: {error}") from error
-    except json.JSONDecodeError as error:
-        raise KeyringError(f"Keyring file {path} is not valid JSON: {error}") from error
-
-    if envelope.get("version") != _KEYRING_FILE_VERSION:
-        raise KeyringError(f"Unsupported keyring file version: {envelope.get('version')!r}")
-    encoded = envelope.get("keys")
-    if not isinstance(encoded, dict) or any(field not in encoded for field in _KEY_FIELDS):
-        raise KeyringError(f"Keyring file {path} is missing one or more keys")
-
-    secret = passphrase.encode("utf-8")
-    keys = {field: _private_key_from_pem(encoded[field], secret) for field in _KEY_FIELDS}
-    return Keyring(**keys)
+    return deserialize_keyring(data, passphrase)
 
 
 def _generate_private_key(key_size: int) -> rsa.RSAPrivateKey:

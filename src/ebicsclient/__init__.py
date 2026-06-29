@@ -16,7 +16,14 @@ from ebicsclient.errors import (
     ReturnCodeError,
     TransportError,
 )
-from ebicsclient.keys import generate_keyring, load_keyring, public_key_hash, save_keyring
+from ebicsclient.keys import (
+    deserialize_keyring,
+    generate_keyring,
+    load_keyring,
+    public_key_hash,
+    save_keyring,
+    serialize_keyring,
+)
 from ebicsclient.models import Keyring
 
 # A library must never configure logging — that is the application's job. Attach a
@@ -38,8 +45,10 @@ __all__ = [
     "ReturnCodeError",
     "TransportError",
     "__version__",
+    "deserialize_keyring",
     "generate_keyring",
     "load_keyring",
     "public_key_hash",
     "save_keyring",
+    "serialize_keyring",
 ]
