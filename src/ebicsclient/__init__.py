@@ -15,6 +15,7 @@ from ebicsclient.errors import (
     KeyringError,
     KeyringFormatError,
     ProtocolError,
+    Retryability,
     ReturnCodeError,
     TransportError,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "KeyringError",
     "KeyringFormatError",
     "ProtocolError",
+    "Retryability",
     "ReturnCodeError",
     "TransportError",
     "__version__",

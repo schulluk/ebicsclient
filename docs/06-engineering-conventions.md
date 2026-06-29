@@ -58,6 +58,29 @@ with the first code; **[soon]** = add as the surface grows.
 - One hierarchy rooted at **`EbicsError`** (`errors.py`). Subtypes: `TransportError`, `ProtocolError`,
   `CryptoError`, `ReturnCodeError` (carries the EBICS return code + text). Consumers catch the base.
 - **Fail closed** — never catch-and-swallow a crypto/verification failure.
+- **Granularity by failure mode, not by call direction.** Split an error type only when the caller would
+  *act differently*. The function name already tells you which operation failed, so an `EncodeError` vs
+  `DecodeError` split adds nothing — but `KeyringDecryptionError` vs `KeyringFormatError` does, because one
+  is fixed by a new passphrase and the other is not. Keep new subtypes under their existing base so coarse
+  `except` handlers keep working.
+
+### Retryable vs permanent
+
+Every error declares **how a retry could help**, via `EbicsError.retryability` (a `Retryability`
+`StrEnum`), so retry loops and user interfaces never have to match on error text. The three states are
+deliberately distinct — conflating them is unsafe:
+
+- **`PERMANENT`** (the default) — retrying never helps; surface it. Malformed data, unsupported
+  version/format, a permanently rejected user, programmer errors. E.g. `KeyringFormatError`.
+- **`CORRECTABLE`** — a retry succeeds only after the *caller corrects the input*; **prompt, never
+  auto-retry**. A wrong passphrase (`KeyringDecryptionError`) is the canonical case.
+- **`TRANSIENT`** — safe to **auto-retry the same call** after a backoff: network timeouts, HTTP 5xx,
+  EBICS recovery/synchronisation return codes. **Only this state is eligible for automatic retry.**
+
+Rules: default to `PERMANENT` (fail closed); promote to `TRANSIENT` only when a retry is genuinely safe —
+and for **write** operations (uploads) that additionally requires the request to be **idempotent**, so an
+auto-retry can't double-submit. Set `retryability` per-instance when it depends on context (e.g. the
+specific return code on `ReturnCodeError`).
 
 ## Configuration & credentials
 

@@ -1,12 +1,36 @@
 """Exception hierarchy for ebicsclient.
 
 Every error raised by this library derives from :class:`EbicsError`, so a caller can
-catch that single base. See docs/06-engineering-conventions.md.
+catch that single base. Each error also declares its :class:`Retryability`, so retry
+loops and user interfaces can react without parsing error messages. See
+docs/06-engineering-conventions.md.
 """
+
+from enum import StrEnum
+
+
+class Retryability(StrEnum):
+    """How an :class:`EbicsError` may be recovered from.
+
+    Lets callers decide what to do without matching on error text, and keeps automatic
+    retries safe — only ``TRANSIENT`` errors are eligible for auto-retry.
+
+    - ``PERMANENT``: retrying never helps; surface it.
+    - ``CORRECTABLE``: retry only after the caller corrects the input (e.g. a wrong passphrase).
+    - ``TRANSIENT``: safe to auto-retry the same call after a backoff.
+    """
+
+    PERMANENT = "permanent"
+    CORRECTABLE = "correctable"
+    TRANSIENT = "transient"
 
 
 class EbicsError(Exception):
     """Base class for every error raised by ebicsclient."""
+
+    #: How a retry may help. Defaults to PERMANENT (fail closed); subtypes or call sites
+    #: raise it to CORRECTABLE or TRANSIENT only when a retry can genuinely succeed.
+    retryability: Retryability = Retryability.PERMANENT
 
 
 class CryptoError(EbicsError):
@@ -31,7 +55,10 @@ class KeyringDecryptionError(KeyringError):
 
     Usually a wrong passphrase; possibly corrupt key material. The two cannot be told
     apart reliably, because the underlying crypto layer reports both the same way.
+    Correctable: re-prompt for the passphrase and retry — never auto-retry the same call.
     """
+
+    retryability = Retryability.CORRECTABLE
 
 
 class TransportError(EbicsError):
