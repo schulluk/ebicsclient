@@ -1,0 +1,20 @@
+# Personal credentials & secrets — NEVER commit
+local/
+*.key
+*.pem
+keyring*
+*.keyring
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

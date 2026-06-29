@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ebicsclient"
+version = "0.0.0"
+description = "Pure-Python client for the EBICS 3.0 (H005) banking protocol"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE.md" }
+authors = [{ name = "Lukas Schulze" }]
+keywords = ["ebics", "banking", "iso20022", "camt", "h005", "fintech"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: Other/Proprietary License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Office/Business :: Financial",
+    "Typing :: Typed",
+]
+dependencies = [
+    "cryptography",
+    "lxml",
+]
+
+# Opt-in extras (runtime-detected). See docs/04.
+[project.optional-dependencies]
+pdf = ["reportlab"]
+
+[project.urls]
+Homepage = "https://github.com/schulluk/ebicsclient"
+Repository = "https://github.com/schulluk/ebicsclient"
+Issues = "https://github.com/schulluk/ebicsclient/issues"
+
+# Dev/test tooling — PEP 735, not published to consumers. See docs/06.
+[dependency-groups]
+test = ["pytest", "python-dotenv"]
+dev = ["ruff", "mypy", { include-group = "test" }]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ebicsclient"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
