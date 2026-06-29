@@ -5,8 +5,6 @@ docs/04-implementation-plan.md for the module layout and docs/06-engineering-con
 for the conventions every addition must follow.
 """
 
-from __future__ import annotations
-
 import logging
 from importlib.metadata import PackageNotFoundError, version
 

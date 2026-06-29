@@ -1,7 +1,5 @@
 """Tests for ebicsclient.keys: keyring generation, persistence, and public-key hashes."""
 
-from __future__ import annotations
-
 import hashlib
 from pathlib import Path
 

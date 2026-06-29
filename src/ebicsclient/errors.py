@@ -4,8 +4,6 @@ Every error raised by this library derives from :class:`EbicsError`, so a caller
 catch that single base. See docs/06-engineering-conventions.md.
 """
 
-from __future__ import annotations
-
 
 class EbicsError(Exception):
     """Base class for every error raised by ebicsclient."""

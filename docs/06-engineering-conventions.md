@@ -96,6 +96,9 @@ with the first code; **[soon]** = add as the surface grows.
 - **Enums, not magic strings, for any closed value set.** Use **`StrEnum`** (stdlib, 3.11+) for
   string-valued sets — members are real strings (clean logging/serialization) yet type-checked. Accept the
   enum in signatures, not bare `str`. Example: `output_format: OutputFormat = OutputFormat.AUTO`.
+- **No `from __future__ import annotations`.** The 3.11+ floor supports `X | Y` (PEP 604) and `list[x]`
+  (PEP 585) natively, so the import is unnecessary boilerplate. If a single module genuinely needs a
+  forward reference, quote that one annotation (`"Keyring"`) rather than adding the blanket future-import.
 
 ## Docstrings
 

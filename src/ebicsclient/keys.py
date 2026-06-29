@@ -9,8 +9,6 @@ Security: the keyring is encrypted at rest with a caller-supplied passphrase tha
 never stored or logged. See docs/06-engineering-conventions.md.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging

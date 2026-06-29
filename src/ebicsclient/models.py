@@ -4,8 +4,6 @@ Plain data holders kept free of behaviour; the logic that operates on them lives
 the feature modules (e.g. ``keys.py`` for keyring generation and persistence).
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.asymmetric import rsa
