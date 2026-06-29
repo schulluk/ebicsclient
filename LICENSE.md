@@ -5,8 +5,8 @@ Copyright © 2026 Lukas Schulze
 
 - **Free for noncommercial use** — personal, research, education, hobby, and other noncommercial
   purposes, as defined in the license.
-- **Commercial or business use requires a separate paid license.** To obtain one, contact the
-  copyright holder.
+- **Commercial or business use requires a separate paid license.** To obtain one, contact
+  **Lukas Schulze** &lt;ebicsclient5@a.schulze.uno&gt;.
 
 Required Notice: Copyright © 2026 Lukas Schulze
 
