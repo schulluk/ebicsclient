@@ -8,6 +8,7 @@ construction must still be validated against a bank test platform.
 import pytest
 from lxml import etree
 
+from crypto_helpers import encrypt_order_data
 from ebicsclient import crypto, keys
 from ebicsclient.errors import CryptoError
 from ebicsclient.models import Keyring
@@ -92,3 +93,15 @@ def test_auth_signature_rejects_a_wrong_key(keyring: Keyring) -> None:
 def test_verify_returns_false_when_signature_is_absent(keyring: Keyring) -> None:
     root = _make_request()  # never signed
     assert not crypto.verify_auth_signature(root, keyring.authentication.public_key())
+
+
+def test_decrypt_order_data_round_trips(keyring: Keyring) -> None:
+    plaintext = b"<OrderData>closing balance</OrderData>" * 40
+    transaction_key, encrypted = encrypt_order_data(keyring.encryption.public_key(), plaintext)
+    recovered = crypto.decrypt_order_data(keyring.encryption, transaction_key, encrypted)
+    assert recovered == plaintext
+
+
+def test_decrypt_order_data_rejects_an_unrecoverable_transaction_key(keyring: Keyring) -> None:
+    with pytest.raises(CryptoError):
+        crypto.decrypt_order_data(keyring.encryption, b"not a valid RSA ciphertext", b"")

@@ -3,10 +3,11 @@
 import pytest
 from lxml import etree
 
+from crypto_helpers import make_hpb_response
 from ebicsclient import keys
 from ebicsclient.client import Client
 from ebicsclient.errors import ReturnCodeError
-from ebicsclient.models import Bank, Keyring, User
+from ebicsclient.models import Bank, Keyring, OutputFormat, User
 
 _NS = "urn:org:ebics:H005"
 _OK_RESPONSE = (
@@ -65,3 +66,22 @@ def test_ini_raises_when_the_bank_rejects(keyring: Keyring) -> None:
     client, _ = _client(_ERROR_RESPONSE, keyring)
     with pytest.raises(ReturnCodeError):
         client.ini()
+
+
+def test_hpb_stores_and_returns_the_bank_keys(keyring: Keyring) -> None:
+    bank_keyring = keys.generate_keyring()
+    client, transport = _client(make_hpb_response(keyring, bank_keyring), keyring)
+    bank_keys = client.hpb()
+    assert transport.posted is not None
+    posted = etree.fromstring(transport.posted)
+    assert posted.findtext(f".//{{{_NS}}}AdminOrderType") == "HPB"
+    expected = bank_keyring.encryption.public_key().public_numbers()
+    assert bank_keys.encryption.public_numbers() == expected
+    assert client.bank_keys is bank_keys
+
+
+def test_make_ini_letter_renders_html(keyring: Keyring) -> None:
+    client, _ = _client(_OK_RESPONSE, keyring)
+    letter = client.make_ini_letter(output_format=OutputFormat.HTML)
+    assert letter.output_format is OutputFormat.HTML
+    assert b"EBICS Initialisation Letter" in letter.content

@@ -42,7 +42,7 @@ Issues = "https://github.com/schulluk/ebicsclient/issues"
 # Dev/test tooling — PEP 735, not published to consumers. See docs/06.
 [dependency-groups]
 test = ["pytest", "python-dotenv"]
-dev = ["ruff", "mypy", "lxml-stubs", { include-group = "test" }]
+dev = ["ruff", "mypy", "lxml-stubs", "reportlab", { include-group = "test" }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ebicsclient"]
@@ -59,3 +59,8 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 python_version = "3.11"
 strict = true
 files = ["src"]
+
+# reportlab (optional [pdf] extra) ships no type information.
+[[tool.mypy.overrides]]
+module = ["reportlab.*"]
+ignore_missing_imports = true

@@ -15,11 +15,14 @@ before it can be trusted (see docs/01 and docs/04).
 
 import base64
 import hashlib
+import zlib
 from typing import cast
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import padding as symmetric_padding
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from lxml import etree
 
 from ebicsclient.errors import CryptoError
@@ -34,6 +37,12 @@ _SHA256 = "http://www.w3.org/2001/04/xmlenc#sha256"
 # digest is taken over exactly those nodes, in document order.
 _AUTHENTICATE_NODES = etree.XPath("//*[@authenticate='true']")
 _REFERENCE_URI = "#xpointer(//*[@authenticate='true'])"
+
+# EBICS encrypts order data with AES in CBC mode under a null initialisation vector; the
+# AES (transaction) key is itself RSA-encrypted to the recipient's E002 key. The null IV
+# and the padding scheme are part of the protocol's failure-prone area #2 and must be
+# validated against a bank test platform (see docs/01).
+_NULL_IV = b"\x00" * 16
 
 
 def canonicalize_exclusive(element: etree._Element) -> bytes:
@@ -87,6 +96,40 @@ def verify_rsa_sha256(public_key: rsa.RSAPublicKey, data: bytes, signature: byte
     except InvalidSignature:
         return False
     return True
+
+
+def decrypt_order_data(
+    encryption_key: rsa.RSAPrivateKey, transaction_key: bytes, encrypted_order_data: bytes
+) -> bytes:
+    """Decrypt and inflate EBICS order data.
+
+    Reverses EBICS order-data protection: the RSA-encrypted transaction key is recovered
+    with the E002 private key, used as an AES key (CBC mode, null IV) to decrypt the order
+    data, then the plaintext is PKCS#7-unpadded and DEFLATE-inflated.
+
+    Args:
+        encryption_key: The subscriber's E002 encryption private key.
+        transaction_key: The RSA-encrypted symmetric transaction key (raw bytes).
+        encrypted_order_data: The AES-encrypted, deflate-compressed order data (raw bytes).
+
+    Returns:
+        The decompressed order-data XML bytes.
+
+    Raises:
+        CryptoError: the transaction key or the order data could not be decrypted or inflated.
+    """
+    try:
+        symmetric_key = encryption_key.decrypt(transaction_key, padding.PKCS1v15())
+    except ValueError as error:
+        raise CryptoError("Could not decrypt the EBICS transaction key") from error
+    try:
+        decryptor = Cipher(algorithms.AES(symmetric_key), modes.CBC(_NULL_IV)).decryptor()
+        padded = decryptor.update(encrypted_order_data) + decryptor.finalize()
+        unpadder = symmetric_padding.PKCS7(algorithms.AES.block_size).unpadder()
+        compressed = unpadder.update(padded) + unpadder.finalize()
+        return zlib.decompress(compressed)
+    except (ValueError, zlib.error) as error:
+        raise CryptoError("Could not decrypt the EBICS order data") from error
 
 
 def digest_authenticated_nodes(root: etree._Element) -> bytes:

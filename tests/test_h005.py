@@ -10,7 +10,8 @@ import zlib
 import pytest
 from lxml import etree
 
-from ebicsclient import keys
+from crypto_helpers import make_hpb_response
+from ebicsclient import crypto, keys
 from ebicsclient.errors import ProtocolError, ReturnCodeError
 from ebicsclient.models import Bank, Keyring, User
 from ebicsclient.protocol import h005
@@ -114,3 +115,30 @@ def test_raise_for_return_code_raises_on_error() -> None:
 def test_raise_for_return_code_rejects_a_response_without_a_code() -> None:
     with pytest.raises(ProtocolError):
         h005.raise_for_return_code(b'<x xmlns="urn:org:ebics:H005"/>')
+
+
+def test_hpb_request_is_signed_and_carries_the_admin_order_type(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    root = etree.fromstring(h005.build_hpb_request(bank, user, keyring))
+    assert root.tag == f"{{{_NS}}}ebicsNoPubKeyDigestsRequest"
+    assert root.findtext(f".//{{{_NS}}}AdminOrderType") == "HPB"
+    assert root.findtext(f".//{{{_NS}}}HostID") == bank.host_id
+    assert root.find(f".//{{{_NS}}}Nonce") is not None
+    assert root.find(f".//{{{_NS}}}Timestamp") is not None
+    assert crypto.verify_auth_signature(root, keyring.authentication.public_key())
+
+
+def test_parse_hpb_response_recovers_the_bank_public_keys(keyring: Keyring) -> None:
+    bank_keyring = keys.generate_keyring()
+    response = make_hpb_response(keyring, bank_keyring)
+    authentication, encryption = h005.parse_hpb_response(response, keyring)
+    expected_authentication = bank_keyring.authentication.public_key().public_numbers()
+    expected_encryption = bank_keyring.encryption.public_key().public_numbers()
+    assert authentication.public_numbers() == expected_authentication
+    assert encryption.public_numbers() == expected_encryption
+
+
+def test_parse_hpb_response_raises_on_a_non_ok_return_code(keyring: Keyring) -> None:
+    with pytest.raises(ReturnCodeError):
+        h005.parse_hpb_response(_ERROR_RESPONSE, keyring)

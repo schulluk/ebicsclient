@@ -290,6 +290,7 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "python-dotenv" },
+    { name = "reportlab" },
     { name = "ruff" },
 ]
 test = [
@@ -311,6 +312,7 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "python-dotenv" },
+    { name = "reportlab" },
     { name = "ruff" },
 ]
 test = [

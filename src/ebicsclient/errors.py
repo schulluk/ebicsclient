@@ -39,6 +39,29 @@ class EbicsError(Exception):
             self.retryability = retryability
 
 
+class MissingDependencyError(EbicsError):
+    """An optional feature was requested but its install extra is not present.
+
+    Raised when a feature gated behind an optional extra is used without that extra
+    installed — for example, PDF letter output without the ``pdf`` extra (reportlab).
+    Installing the named extra and retrying resolves it.
+
+    Args:
+        feature: Human description of the requested feature (e.g. "PDF letter output").
+        extra: The install extra that provides it (e.g. ``"pdf"``).
+
+    Attributes:
+        extra: The install extra that provides the missing feature.
+    """
+
+    def __init__(self, feature: str, extra: str) -> None:
+        self.extra = extra
+        super().__init__(
+            f'{feature} requires the optional "{extra}" extra '
+            f'(install with: pip install "ebicsclient[{extra}]")'
+        )
+
+
 class CryptoError(EbicsError):
     """A cryptographic operation failed (key handling, signing, encryption)."""
 
