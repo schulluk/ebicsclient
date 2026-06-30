@@ -175,6 +175,5 @@ each likely future need is "drop in a module + register it," never a refactor. T
 
 ## Downstream integration
 
-The downstream app (`downstream app`, Django backend) consumes this as a dependency for its ZKB broker:
-call `download()` (EOP/camt.053 OrderSpec) on the sync schedule, parse, store balances alongside
-various accounts.
+A downstream application embeds this as a dependency: call `download()` (EOP/camt.053 OrderSpec) on a
+sync schedule, parse the statement, and store the closing balances.

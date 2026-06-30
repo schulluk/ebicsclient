@@ -8,8 +8,8 @@ Kantonalbank (ZKB).
   exclusive-c14n); everything else stdlib. No PHP/Java sidecar. (Rationale: [docs/04-implementation-plan.md](docs/04-implementation-plan.md#dependencies).)
 - **License model:** source-available — **free for personal use, paid license for commercial/business use**
   (see [docs/02-licensing-strategy.md](docs/02-licensing-strategy.md)).
-- **First consumer:** the downstream app (`downstream app`) ZKB broker integration. This library is being
-  split out as its own product because it's a stable, reusable, sellable standard — reusable.
+- **Reusable & app-agnostic:** designed to be embedded as a dependency in a downstream application,
+  not tied to any one consumer — a stable, reusable standard.
 
 ## Why this exists
 
@@ -41,15 +41,12 @@ This is a money-moving library — the engineering bar is [docs/06-engineering-c
 
 ## Status
 
-**Repository scaffolded; implementation not started.** In place: planning docs, engineering conventions,
-the dual-license (PolyForm Noncommercial), and packaging (`pyproject.toml` + `src/ebicsclient` skeleton).
-Locked decisions: package name **`ebicsclient`**; runtime deps **`cryptography` + `lxml`** only;
-**Python 3.11+**; MVP = **handshake + read-only download** (key ceremony → fetch `EOP/camt.053.001.08` →
-parse balances), with `protocol/` and `formats/` seams left for future EBICS versions / message formats
-(see [docs/04-implementation-plan.md](docs/04-implementation-plan.md)). Next: implement per the build order,
-starting with `keys.py`. ZKB subscriber is provisioned (noted (date)) but **not yet
-initialized** — the INI/HIA key ceremony + signed paper letters to ZKB are the long pole and should be
-kicked off early (see doc 05).
+**Under active development.** Locked decisions: package name **`ebicsclient`**; runtime deps
+**`cryptography` + `lxml`** only; **Python 3.11+**; MVP = **handshake + read-only download** (key
+ceremony → fetch `EOP/camt.053.001.08` → parse balances), with `protocol/` and `formats/` seams left for
+future EBICS versions / message formats (see [docs/04-implementation-plan.md](docs/04-implementation-plan.md)).
+Implemented so far: keys/keyring, the exception model, and the authentication signature; transport and the
+INI/HIA/HPB handshake are next.
 
 ## License
 

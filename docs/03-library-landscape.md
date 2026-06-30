@@ -18,8 +18,6 @@ No existing option is both pure-Python and openly licensed, which is the gap thi
 - **Low maintenance:** EBICS is a stable, formally versioned standard. Scoped to download-only + camt.053,
   the surface is small and changes rarely; the occasional format/version bumps are pre-announced (we track
   the Nov 2025 / Nov 2026 deadlines).
-- **Fits the downstream app pattern:** existing brokers (MS via tooling, broker Flex) are custom
-  integrations; a scoped EBICS module is more standardized than any of those.
 - **It becomes a product** (see [02-licensing-strategy.md](02-licensing-strategy.md)).
 
 ## The honest cost

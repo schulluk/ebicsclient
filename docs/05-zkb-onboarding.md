@@ -1,8 +1,8 @@
 # ZKB onboarding — the init ceremony
 
-ZKB recommends H005 ((date)) and recommends **EBICS 3.0 (H005)**. The subscriber
-is **under setup** — your own keys don't exist at the bank yet. Activation is
-**purely via hand-signed paper init letters**; there is **no transport password / activation PIN**.
+ZKB recommends **EBICS 3.0 (H005)**. Before any download, a subscriber's keys must be initialised at the
+bank. Activation is **purely via hand-signed paper init letters**; there is **no transport password /
+activation PIN**.
 
 > Real connection parameters (Host ID, Partner/User ID, bank-key hashes) live in the workspace `../local/`
 > directory **outside** this repo, taken from the ZKB *Bankparameterdaten* letter. Never commit them.
@@ -24,7 +24,7 @@ is **under setup** — your own keys don't exist at the bank yet. Activation is
 Steps 1–4 (up to printing the letters) can be built and tested **without** waiting on ZKB — do them
 against the test platform first. Step 5 onward needs ZKB to have activated you.
 
-## Order types / BTF authorized (from the letter)
+## Order types / BTF (ZKB Bankparameterdaten)
 
 - **Submission** (key mgmt): `HCA`, `HCS`, `HIA`, `INI`, `PUB`, `SPR`.
 - **Download**: `HAA`, `HAC`, `HKD`, `HPB`, `HPD`, `HTD`, `PTK`, plus the BTF business transactions.

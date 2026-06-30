@@ -1,8 +1,8 @@
 # EBICS client library — project instructions
 
 This repo is a **from-scratch, pure-Python EBICS 3.0 (H005) client library**. Source-available,
-dual-licensed (free personal / paid commercial). First real consumer is the downstream app's ZKB
-broker integration, but the library is bank- and app-agnostic.
+dual-licensed (free personal / paid commercial). The library is bank- and app-agnostic; ZKB is the
+first bank targeted for protocol validation.
 
 ## The bar: this software moves money
 

@@ -68,7 +68,7 @@ variant and the legacy `STA`/`VMK`/MT940/`Z5x` order types — those are the dyi
 2. **Transfer** — pull each segment (`segmentNumber`), reassemble.
 3. **Receipt** — acknowledge (positive/negative) so the bank can mark the order delivered.
 
-## camt.053.001.08 parsing (what the downstream app needs)
+## camt.053.001.08 parsing
 
 camt.053 is plain XML. For net-worth tracking the key field is the **closing booked balance**
 (`Bal` with `Cd=CLBD`) per account (`Acct/Id/IBAN`), plus optionally the entries (`Ntry`) for a
