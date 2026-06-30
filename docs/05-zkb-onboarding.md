@@ -12,11 +12,12 @@ activation PIN**.
 1. **Generate** your three RSA keypairs (A006 sig, X002 auth, E002 enc) → encrypted keyring.
 2. **INI** — send your signature public key (`ebicsUnsecuredRequest`, order type `INI`).
 3. **HIA** — send your authentication + encryption public keys (order type `HIA`).
-4. **Initialisierungsbriefe** — `make_ini_letter()` renders the INI + HIA letters as **printable HTML**
-   (no PDF dependency — see doc 04; print from a browser, "Save as PDF" if you want a file) containing the
-   SHA-256 hashes of *your* public keys. **Sign them by hand (legally valid signature)** and mail to ZKB
-   Kompetenzcenter Services. ZKB verifies the signature against documents on file, then activates and
-   confirms your access.
+4. **Initialisierungsbriefe** — `make_ini_letter()` renders the letter (covering all three keys) as
+   **printable HTML** by default (no dependency) or as **PDF** with the optional `pdf` extra; `AUTO`
+   picks PDF when that extra is installed, else HTML. It contains the SHA-256 hashes of *your* public
+   keys. **Sign it by hand (legally valid signature)** and mail to ZKB Kompetenzcenter Services. ZKB
+   verifies the signature against documents on file, then activates and confirms your access. See
+   [doc 07](07-handshake-testing.md) for the end-to-end test walkthrough.
 5. **HPB** — download ZKB's public keys and **verify them against the hashes printed on p.2 of the
    Bankparameterdaten letter** (in `../local/`).
 6. **Download** statements via the `EOP/camt.053.001.08` BTF.

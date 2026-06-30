@@ -30,6 +30,7 @@ maintenance** — the cost is upfront correctness. See
 | [docs/04-implementation-plan.md](docs/04-implementation-plan.md) | Scope, modules, the two hard parts, build order, test strategy |
 | [docs/05-zkb-onboarding.md](docs/05-zkb-onboarding.md) | The INI/HIA + signed-letter ceremony, ZKB BTF/order params |
 | [docs/06-engineering-conventions.md](docs/06-engineering-conventions.md) | Baseline practices: layout, logging, errors, security, typing, testing, CI |
+| [docs/07-handshake-testing.md](docs/07-handshake-testing.md) | Validating INI/HIA/HPB end to end against the ZKB test platform |
 | `../local/` (outside the repo) | Real ZKB connection credentials, kept in the workspace **outside** the repo — can't be committed |
 
 ## Development
@@ -45,8 +46,11 @@ This is a money-moving library — the engineering bar is [docs/06-engineering-c
 **`cryptography` + `lxml`** only; **Python 3.11+**; MVP = **handshake + read-only download** (key
 ceremony → fetch `EOP/camt.053.001.08` → parse balances), with `protocol/` and `formats/` seams left for
 future EBICS versions / message formats (see [docs/04-implementation-plan.md](docs/04-implementation-plan.md)).
-Implemented so far: keys/keyring, the exception model, and the authentication signature; transport and the
-INI/HIA/HPB handshake are next.
+Implemented so far: keys/keyring, the exception model, the authentication signature, the HTTPS transport,
+and the full **INI/HIA/HPB handshake** — including the initialisation letter (HTML, or PDF via the optional
+`pdf` extra) and order-data decryption. The handshake is covered by offline tests and ready for live
+validation against the ZKB test platform ([docs/07](docs/07-handshake-testing.md)); the statement download
+(`EOP/camt.053.001.08`) is next.
 
 ## License
 
