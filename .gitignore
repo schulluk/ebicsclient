@@ -13,6 +13,8 @@ venv/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
+dist/
+build/
 
 # OS / editor
 .DS_Store
