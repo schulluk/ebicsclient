@@ -1,5 +1,7 @@
 # Personal credentials & secrets — NEVER commit
 local/
+.env
+*.env
 *.key
 *.pem
 keyring*
