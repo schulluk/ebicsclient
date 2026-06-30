@@ -42,7 +42,7 @@ Issues = "https://github.com/schulluk/ebicsclient/issues"
 # Dev/test tooling — PEP 735, not published to consumers. See docs/06.
 [dependency-groups]
 test = ["pytest", "python-dotenv"]
-dev = ["ruff", "mypy", { include-group = "test" }]
+dev = ["ruff", "mypy", "lxml-stubs", { include-group = "test" }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ebicsclient"]
