@@ -10,6 +10,32 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 
 @dataclass(frozen=True, slots=True)
+class Bank:
+    """Connection details for a bank's EBICS endpoint.
+
+    Attributes:
+        host_id: The bank's EBICS Host ID.
+        url: The bank's EBICS HTTPS endpoint.
+    """
+
+    host_id: str
+    url: str
+
+
+@dataclass(frozen=True, slots=True)
+class User:
+    """A subscriber's identifiers at the bank.
+
+    Attributes:
+        partner_id: The customer (Partner) ID.
+        user_id: The subscriber (User) ID.
+    """
+
+    partner_id: str
+    user_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class Keyring:
     """A subscriber's three EBICS RSA key pairs.
 

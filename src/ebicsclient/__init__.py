@@ -8,6 +8,7 @@ for the conventions every addition must follow.
 import logging
 from importlib.metadata import PackageNotFoundError, version
 
+from ebicsclient.client import Client
 from ebicsclient.errors import (
     CryptoError,
     EbicsError,
@@ -27,7 +28,7 @@ from ebicsclient.keys import (
     save_keyring,
     serialize_keyring,
 )
-from ebicsclient.models import Keyring
+from ebicsclient.models import Bank, Keyring, User
 
 # A library must never configure logging — that is the application's job. Attach a
 # NullHandler so importing the package never emits "No handlers could be found"
@@ -40,6 +41,8 @@ except PackageNotFoundError:  # running from a source tree without an install
     __version__ = "0.0.0"
 
 __all__ = [
+    "Bank",
+    "Client",
     "CryptoError",
     "EbicsError",
     "Keyring",
@@ -50,6 +53,7 @@ __all__ = [
     "Retryability",
     "ReturnCodeError",
     "TransportError",
+    "User",
     "__version__",
     "deserialize_keyring",
     "generate_keyring",
