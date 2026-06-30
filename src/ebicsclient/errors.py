@@ -28,9 +28,15 @@ class Retryability(StrEnum):
 class EbicsError(Exception):
     """Base class for every error raised by ebicsclient."""
 
-    #: How a retry may help. Defaults to PERMANENT (fail closed); subtypes or call sites
-    #: raise it to CORRECTABLE or TRANSIENT only when a retry can genuinely succeed.
+    #: How a retry may help. Defaults to PERMANENT (fail closed). Subtypes set it at
+    #: class level (e.g. KeyringDecryptionError), or a call site passes ``retryability=``
+    #: for cases that vary per instance (e.g. a transport timeout vs a 4xx).
     retryability: Retryability = Retryability.PERMANENT
+
+    def __init__(self, *args: object, retryability: Retryability | None = None) -> None:
+        super().__init__(*args)
+        if retryability is not None:
+            self.retryability = retryability
 
 
 class CryptoError(EbicsError):
@@ -81,7 +87,9 @@ class ReturnCodeError(ProtocolError):
         text: The report text, or ``None`` if the bank supplied none.
     """
 
-    def __init__(self, code: str, text: str | None = None) -> None:
+    def __init__(
+        self, code: str, text: str | None = None, *, retryability: Retryability | None = None
+    ) -> None:
         self.code = code
         self.text = text
-        super().__init__(code if text is None else f"{code}: {text}")
+        super().__init__(code if text is None else f"{code}: {text}", retryability=retryability)

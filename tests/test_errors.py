@@ -22,3 +22,12 @@ def test_retryability_is_available_when_catching_the_base() -> None:
         raise KeyringDecryptionError("nope")
     except EbicsError as error:
         assert error.retryability is Retryability.CORRECTABLE
+
+
+def test_retryability_can_be_set_per_instance_via_the_constructor() -> None:
+    assert (
+        EbicsError("boom", retryability=Retryability.TRANSIENT).retryability
+        is Retryability.TRANSIENT
+    )
+    # Omitting it falls back to the class default.
+    assert EbicsError("boom").retryability is Retryability.PERMANENT

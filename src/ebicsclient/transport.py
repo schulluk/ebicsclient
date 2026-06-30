@@ -67,14 +67,16 @@ class Transport:
                 return data
         except urllib.error.HTTPError as error:
             transient = error.code in _TRANSIENT_STATUS or 500 <= error.code < 600
-            raise _transport_error(
-                f"EBICS endpoint returned HTTP {error.code}", transient=transient
+            raise TransportError(
+                f"EBICS endpoint returned HTTP {error.code}",
+                retryability=Retryability.TRANSIENT if transient else Retryability.PERMANENT,
             ) from error
         except (TimeoutError, urllib.error.URLError) as error:
             # Connection-level failures (timeout, reset, DNS) — transient for an
             # idempotent request; the caller decides whether to retry.
-            raise _transport_error(
-                f"Could not reach EBICS endpoint {self._url}: {error}", transient=True
+            raise TransportError(
+                f"Could not reach EBICS endpoint {self._url}: {error}",
+                retryability=Retryability.TRANSIENT,
             ) from error
 
 
@@ -82,10 +84,3 @@ def _build_ssl_context() -> ssl.SSLContext:
     context = ssl.create_default_context()
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     return context
-
-
-def _transport_error(message: str, *, transient: bool) -> TransportError:
-    error = TransportError(message)
-    if transient:
-        error.retryability = Retryability.TRANSIENT
-    return error
