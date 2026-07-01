@@ -8,6 +8,8 @@ import base64
 import zlib
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric import rsa
 from lxml import etree
 
 from crypto_helpers import make_hpb_response
@@ -17,6 +19,7 @@ from ebicsclient.models import Bank, Keyring, User
 from ebicsclient.protocol import h005
 
 _NS = h005.NAMESPACE
+_S002 = h005.S002_NAMESPACE
 _DS = "http://www.w3.org/2000/09/xmldsig#"
 
 _OK_RESPONSE = (
@@ -59,12 +62,15 @@ def _order_data(request_bytes: bytes) -> etree._Element:
     return etree.fromstring(zlib.decompress(base64.b64decode(encoded)))
 
 
-def _modulus(element: etree._Element, info_tag: str) -> int:
-    info = element.find(f".//{{{_NS}}}{info_tag}")
+def _certified_modulus(element: etree._Element, namespace: str, info_tag: str) -> int:
+    info = element.find(f".//{{{namespace}}}{info_tag}")
     assert info is not None
-    encoded = info.findtext(f".//{{{_DS}}}Modulus")
-    assert encoded is not None
-    return int.from_bytes(base64.b64decode(encoded), "big")
+    certificate_base64 = info.findtext(f".//{{{_DS}}}X509Certificate")
+    assert certificate_base64 is not None
+    certificate = x509.load_der_x509_certificate(base64.b64decode(certificate_base64))
+    public_key = certificate.public_key()
+    assert isinstance(public_key, rsa.RSAPublicKey)
+    return public_key.public_numbers().n
 
 
 def test_ini_request_carries_host_and_user_ids(bank: Bank, user: User, keyring: Keyring) -> None:
@@ -75,17 +81,18 @@ def test_ini_request_carries_host_and_user_ids(bank: Bank, user: User, keyring: 
     assert root.findtext(f".//{{{_NS}}}AdminOrderType") == "INI"
 
 
-def test_ini_order_data_carries_the_a006_signature_key(
+def test_ini_order_data_carries_the_a006_signature_certificate(
     bank: Bank, user: User, keyring: Keyring
 ) -> None:
     order_data = _order_data(h005.build_ini_request(bank, user, keyring))
-    assert order_data.tag == f"{{{_NS}}}SignaturePubKeyOrderData"
-    assert order_data.findtext(f".//{{{_NS}}}SignatureVersion") == "A006"
+    # H005 signature key order data lives in the S002 namespace and carries an X.509 cert.
+    assert order_data.tag == f"{{{_S002}}}SignaturePubKeyOrderData"
+    assert order_data.findtext(f".//{{{_S002}}}SignatureVersion") == "A006"
     expected = keyring.signature.public_key().public_numbers().n
-    assert _modulus(order_data, "SignaturePubKeyInfo") == expected
+    assert _certified_modulus(order_data, _S002, "SignaturePubKeyInfo") == expected
 
 
-def test_hia_request_carries_both_auth_and_encryption_keys(
+def test_hia_request_carries_both_auth_and_encryption_certificates(
     bank: Bank, user: User, keyring: Keyring
 ) -> None:
     root = etree.fromstring(h005.build_hia_request(bank, user, keyring))
@@ -93,10 +100,10 @@ def test_hia_request_carries_both_auth_and_encryption_keys(
     order_data = _order_data(h005.build_hia_request(bank, user, keyring))
     assert order_data.findtext(f".//{{{_NS}}}AuthenticationVersion") == "X002"
     assert order_data.findtext(f".//{{{_NS}}}EncryptionVersion") == "E002"
-    assert _modulus(order_data, "AuthenticationPubKeyInfo") == (
+    assert _certified_modulus(order_data, _NS, "AuthenticationPubKeyInfo") == (
         keyring.authentication.public_key().public_numbers().n
     )
-    assert _modulus(order_data, "EncryptionPubKeyInfo") == (
+    assert _certified_modulus(order_data, _NS, "EncryptionPubKeyInfo") == (
         keyring.encryption.public_key().public_numbers().n
     )
 
@@ -142,3 +149,21 @@ def test_parse_hpb_response_recovers_the_bank_public_keys(keyring: Keyring) -> N
 def test_parse_hpb_response_raises_on_a_non_ok_return_code(keyring: Keyring) -> None:
     with pytest.raises(ReturnCodeError):
         h005.parse_hpb_response(_ERROR_RESPONSE, keyring)
+
+
+def test_public_key_from_info_falls_back_to_rsa_key_value(keyring: Keyring) -> None:
+    # A bank that sends a legacy RSAKeyValue instead of an X.509 certificate is still read.
+    numbers = keyring.authentication.public_key().public_numbers()
+    root = etree.Element(f"{{{_NS}}}HPBResponseOrderData", nsmap={None: _NS, "ds": _DS})
+    info = etree.SubElement(root, f"{{{_NS}}}AuthenticationPubKeyInfo")
+    rsa_key_value = etree.SubElement(
+        etree.SubElement(info, f"{{{_NS}}}PubKeyValue"), f"{{{_DS}}}RSAKeyValue"
+    )
+    etree.SubElement(rsa_key_value, f"{{{_DS}}}Modulus").text = _b64_int(numbers.n)
+    etree.SubElement(rsa_key_value, f"{{{_DS}}}Exponent").text = _b64_int(numbers.e)
+    recovered = h005._public_key_from_info(root, "AuthenticationPubKeyInfo")
+    assert recovered.public_numbers() == numbers
+
+
+def _b64_int(value: int) -> str:
+    return base64.b64encode(value.to_bytes((value.bit_length() + 7) // 8, "big")).decode("ascii")

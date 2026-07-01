@@ -13,8 +13,10 @@ import zlib
 from cryptography.hazmat.primitives import padding as symmetric_padding
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.serialization import Encoding
 from lxml import etree
 
+from ebicsclient.keys import generate_self_signed_certificate
 from ebicsclient.models import Keyring
 from ebicsclient.protocol import h005
 
@@ -78,11 +80,11 @@ def _hpb_order_data(bank_keyring: Keyring, host_id: str) -> bytes:
     )
     _pub_key_info(
         root, "AuthenticationPubKeyInfo", "AuthenticationVersion", "X002",
-        bank_keyring.authentication.public_key(),
+        bank_keyring.authentication,
     )
     _pub_key_info(
         root, "EncryptionPubKeyInfo", "EncryptionVersion", "E002",
-        bank_keyring.encryption.public_key(),
+        bank_keyring.encryption,
     )
     etree.SubElement(root, etree.QName(namespace, "HostID")).text = host_id
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
@@ -93,18 +95,13 @@ def _pub_key_info(
     info_tag: str,
     version_tag: str,
     version: str,
-    public_key: rsa.RSAPublicKey,
+    private_key: rsa.RSAPrivateKey,
 ) -> None:
+    # H005 carries the bank key as an X.509 certificate, so the fixtures do too.
     namespace = h005.NAMESPACE
-    numbers = public_key.public_numbers()
+    certificate = generate_self_signed_certificate(private_key, "BANK")
+    encoded = base64.b64encode(certificate.public_bytes(Encoding.DER)).decode("ascii")
     info = etree.SubElement(parent, etree.QName(namespace, info_tag))
-    pub_key_value = etree.SubElement(info, etree.QName(namespace, "PubKeyValue"))
-    rsa_key_value = etree.SubElement(pub_key_value, etree.QName(_DS, "RSAKeyValue"))
-    etree.SubElement(rsa_key_value, etree.QName(_DS, "Modulus")).text = _b64_int(numbers.n)
-    etree.SubElement(rsa_key_value, etree.QName(_DS, "Exponent")).text = _b64_int(numbers.e)
+    x509_data = etree.SubElement(info, etree.QName(_DS, "X509Data"))
+    etree.SubElement(x509_data, etree.QName(_DS, "X509Certificate")).text = encoded
     etree.SubElement(info, etree.QName(namespace, version_tag)).text = version
-
-
-def _b64_int(value: int) -> str:
-    length = (value.bit_length() + 7) // 8
-    return base64.b64encode(value.to_bytes(length, "big")).decode("ascii")

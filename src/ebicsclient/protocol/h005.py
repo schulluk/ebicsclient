@@ -17,16 +17,22 @@ import os
 import zlib
 from typing import cast
 
+from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import Encoding
 from lxml import etree
 
-from ebicsclient import crypto
+from ebicsclient import crypto, keys
 from ebicsclient.errors import ProtocolError, ReturnCodeError
 from ebicsclient.models import Bank, Keyring, User
 
 NAMESPACE = "urn:org:ebics:H005"
+# EBICS signature keys (A006) are defined in their own S002 namespace, so the INI order
+# data lives there — unlike the HIA order data, which is in the H005 namespace.
+S002_NAMESPACE = "http://www.ebics.org/S002"
 _DS = "http://www.w3.org/2000/09/xmldsig#"
 _NSMAP = cast("dict[str, str]", {None: NAMESPACE, "ds": _DS})
+_S002_NSMAP = cast("dict[str, str]", {None: S002_NAMESPACE, "ds": _DS})
 
 _PROTOCOL_VERSION = "H005"
 _REVISION = "1"
@@ -52,7 +58,8 @@ def build_ini_request(bank: Bank, user: User, keyring: Keyring) -> bytes:
     Returns:
         The serialised ``ebicsUnsecuredRequest`` XML.
     """
-    order_data = _signature_pubkey_order_data(user, keyring.signature.public_key())
+    certificate = keys.generate_self_signed_certificate(keyring.signature, user.user_id)
+    order_data = _signature_pubkey_order_data(user, certificate)
     return _unsecured_request(bank, user, "INI", order_data)
 
 
@@ -67,9 +74,9 @@ def build_hia_request(bank: Bank, user: User, keyring: Keyring) -> bytes:
     Returns:
         The serialised ``ebicsUnsecuredRequest`` XML.
     """
-    order_data = _hia_request_order_data(
-        user, keyring.authentication.public_key(), keyring.encryption.public_key()
-    )
+    authentication = keys.generate_self_signed_certificate(keyring.authentication, user.user_id)
+    encryption = keys.generate_self_signed_certificate(keyring.encryption, user.user_id)
+    order_data = _hia_request_order_data(user, authentication, encryption)
     return _unsecured_request(bank, user, "HIA", order_data)
 
 
@@ -176,10 +183,30 @@ def _public_key_from_info(root: etree._Element, info_tag: str) -> rsa.RSAPublicK
     info = root.find(f".//{{{NAMESPACE}}}{info_tag}")
     if info is None:
         raise ProtocolError(f"HPB response is missing <{info_tag}>")
+    # H005 carries the bank key as an X.509 certificate; fall back to a plain RSAKeyValue
+    # in case a bank sends the legacy representation.
+    certificate = info.findtext(f".//{{{_DS}}}X509Certificate")
+    if certificate is not None:
+        return _public_key_from_certificate(certificate, info_tag)
+    return _public_key_from_rsa_key_value(info, info_tag)
+
+
+def _public_key_from_certificate(certificate_base64: str, info_tag: str) -> rsa.RSAPublicKey:
+    try:
+        certificate = x509.load_der_x509_certificate(base64.b64decode(certificate_base64))
+    except ValueError as error:
+        raise ProtocolError(f"HPB response <{info_tag}> has an unreadable certificate") from error
+    public_key = certificate.public_key()
+    if not isinstance(public_key, rsa.RSAPublicKey):
+        raise ProtocolError(f"HPB response <{info_tag}> certificate does not hold an RSA key")
+    return public_key
+
+
+def _public_key_from_rsa_key_value(info: etree._Element, info_tag: str) -> rsa.RSAPublicKey:
     modulus = info.findtext(f".//{{{_DS}}}Modulus")
     exponent = info.findtext(f".//{{{_DS}}}Exponent")
     if modulus is None or exponent is None:
-        raise ProtocolError(f"HPB response <{info_tag}> is missing a modulus or exponent")
+        raise ProtocolError(f"HPB response <{info_tag}> is missing a certificate or key value")
     numbers = rsa.RSAPublicNumbers(
         int.from_bytes(base64.b64decode(exponent), "big"),
         int.from_bytes(base64.b64decode(modulus), "big"),
@@ -219,41 +246,39 @@ def _unsecured_request(bank: Bank, user: User, order_type: str, order_data: byte
     return _serialize(root)
 
 
-def _signature_pubkey_order_data(user: User, public_key: rsa.RSAPublicKey) -> bytes:
-    root = etree.Element(etree.QName(NAMESPACE, "SignaturePubKeyOrderData"), nsmap=_NSMAP)
-    info = etree.SubElement(root, etree.QName(NAMESPACE, "SignaturePubKeyInfo"))
-    etree.SubElement(info, etree.QName(NAMESPACE, "PubKeyValue")).append(_rsa_key_value(public_key))
-    _text(info, "SignatureVersion", _SIGNATURE_VERSION)
-    _text(root, "PartnerID", user.partner_id)
-    _text(root, "UserID", user.user_id)
+def _signature_pubkey_order_data(user: User, certificate: x509.Certificate) -> bytes:
+    root = etree.Element(etree.QName(S002_NAMESPACE, "SignaturePubKeyOrderData"), nsmap=_S002_NSMAP)
+    info = etree.SubElement(root, etree.QName(S002_NAMESPACE, "SignaturePubKeyInfo"))
+    _append_x509_data(info, certificate)
+    _s002_text(info, "SignatureVersion", _SIGNATURE_VERSION)
+    _s002_text(root, "PartnerID", user.partner_id)
+    _s002_text(root, "UserID", user.user_id)
     return _serialize(root)
 
 
 def _hia_request_order_data(
-    user: User, auth_key: rsa.RSAPublicKey, enc_key: rsa.RSAPublicKey
+    user: User, authentication: x509.Certificate, encryption: x509.Certificate
 ) -> bytes:
     root = etree.Element(etree.QName(NAMESPACE, "HIARequestOrderData"), nsmap=_NSMAP)
     auth_info = etree.SubElement(root, etree.QName(NAMESPACE, "AuthenticationPubKeyInfo"))
-    etree.SubElement(auth_info, etree.QName(NAMESPACE, "PubKeyValue")).append(
-        _rsa_key_value(auth_key)
-    )
+    _append_x509_data(auth_info, authentication)
     _text(auth_info, "AuthenticationVersion", _AUTHENTICATION_VERSION)
     enc_info = etree.SubElement(root, etree.QName(NAMESPACE, "EncryptionPubKeyInfo"))
-    etree.SubElement(enc_info, etree.QName(NAMESPACE, "PubKeyValue")).append(
-        _rsa_key_value(enc_key)
-    )
+    _append_x509_data(enc_info, encryption)
     _text(enc_info, "EncryptionVersion", _ENCRYPTION_VERSION)
     _text(root, "PartnerID", user.partner_id)
     _text(root, "UserID", user.user_id)
     return _serialize(root)
 
 
-def _rsa_key_value(public_key: rsa.RSAPublicKey) -> etree._Element:
-    numbers = public_key.public_numbers()
-    rsa_key_value = etree.Element(etree.QName(_DS, "RSAKeyValue"))
-    _ds_text(rsa_key_value, "Modulus", _int_to_base64(numbers.n))
-    _ds_text(rsa_key_value, "Exponent", _int_to_base64(numbers.e))
-    return rsa_key_value
+def _append_x509_data(pub_key_info: etree._Element, certificate: x509.Certificate) -> None:
+    # EBICS H005 carries each public key as an X.509 certificate under ds:X509Data.
+    x509_data = etree.SubElement(pub_key_info, etree.QName(_DS, "X509Data"))
+    issuer_serial = etree.SubElement(x509_data, etree.QName(_DS, "X509IssuerSerial"))
+    _ds_text(issuer_serial, "X509IssuerName", certificate.issuer.rfc4514_string())
+    _ds_text(issuer_serial, "X509SerialNumber", str(certificate.serial_number))
+    certificate_der = certificate.public_bytes(Encoding.DER)
+    _ds_text(x509_data, "X509Certificate", base64.b64encode(certificate_der).decode("ascii"))
 
 
 def _text(parent: etree._Element, local_name: str, text: str) -> etree._Element:
@@ -262,14 +287,15 @@ def _text(parent: etree._Element, local_name: str, text: str) -> etree._Element:
     return element
 
 
+def _s002_text(parent: etree._Element, local_name: str, text: str) -> etree._Element:
+    element = etree.SubElement(parent, etree.QName(S002_NAMESPACE, local_name))
+    element.text = text
+    return element
+
+
 def _ds_text(parent: etree._Element, local_name: str, text: str) -> None:
     element = etree.SubElement(parent, etree.QName(_DS, local_name))
     element.text = text
-
-
-def _int_to_base64(value: int) -> str:
-    length = (value.bit_length() + 7) // 8
-    return base64.b64encode(value.to_bytes(length, "big")).decode("ascii")
 
 
 def _serialize(root: etree._Element) -> bytes:

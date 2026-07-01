@@ -109,3 +109,11 @@ def test_save_and_load_keyring_round_trip_through_a_file(keyring: Keyring, tmp_p
 def test_load_keyring_from_a_missing_file_raises(tmp_path: Path) -> None:
     with pytest.raises(KeyringError):
         keys.load_keyring(tmp_path / "does-not-exist.json", passphrase=_PASSPHRASE)
+
+
+def test_self_signed_certificate_wraps_the_public_key(keyring: Keyring) -> None:
+    certificate = keys.generate_self_signed_certificate(keyring.signature, "USER1")
+    embedded = certificate.public_key()
+    assert isinstance(embedded, rsa.RSAPublicKey)
+    assert embedded.public_numbers() == keyring.signature.public_key().public_numbers()
+    assert certificate.issuer == certificate.subject  # self-signed

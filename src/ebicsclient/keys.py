@@ -15,13 +15,16 @@ Security: the keyring is encrypted at rest with a caller-supplied passphrase tha
 never stored or logged. See docs/06-engineering-conventions.md.
 """
 
+import datetime
 import hashlib
 import json
 import logging
 from pathlib import Path
 
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from ebicsclient.errors import KeyringDecryptionError, KeyringError, KeyringFormatError
 from ebicsclient.models import Keyring
@@ -33,6 +36,10 @@ _MINIMUM_KEY_SIZE = 2048
 _PUBLIC_EXPONENT = 65537
 _KEYRING_FORMAT_VERSION = 1
 _KEY_FIELDS = ("signature", "authentication", "encryption")
+
+# Self-signed certificates for the key-based ("mit Schlüsseln") profile are long-lived;
+# the bank only extracts the public key from them.
+_CERTIFICATE_VALIDITY_DAYS = 365 * 10
 
 
 def generate_keyring(key_size: int = _MINIMUM_KEY_SIZE) -> Keyring:
@@ -57,6 +64,37 @@ def generate_keyring(key_size: int = _MINIMUM_KEY_SIZE) -> Keyring:
         signature=_generate_private_key(key_size),
         authentication=_generate_private_key(key_size),
         encryption=_generate_private_key(key_size),
+    )
+
+
+def generate_self_signed_certificate(
+    private_key: rsa.RSAPrivateKey, common_name: str
+) -> x509.Certificate:
+    """Generate a self-signed X.509 certificate carrying an EBICS public key.
+
+    EBICS 3.0 (H005) transmits public keys as X.509 certificates (``ds:X509Data``). In the
+    key-based ("mit Schlüsseln") profile the certificate is self-signed by the very key it
+    carries, and the bank simply extracts the public key from it — the certificate's
+    subject, validity, and serial are not otherwise significant.
+
+    Args:
+        private_key: The key pair to certify; its public half is embedded and it self-signs.
+        common_name: The subject/issuer common name (e.g. the subscriber's User ID).
+
+    Returns:
+        The self-signed certificate.
+    """
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    now = datetime.datetime.now(datetime.UTC)
+    return (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=_CERTIFICATE_VALIDITY_DAYS))
+        .sign(private_key, hashes.SHA256())
     )
 
 
