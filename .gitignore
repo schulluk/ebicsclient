@@ -21,6 +21,9 @@ build/
 # PHP parity tool — the recipe is committed, the fetched dependency is not
 tools/php-parity/vendor/
 
+# EBICS XSD schemas — fetched on demand (python tools/fetch-schemas.py), not redistributed
+tests/schema/
+
 # OS / editor
 .DS_Store
 .idea/

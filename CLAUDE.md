@@ -52,6 +52,27 @@ never hardcode or commit them.
 
 Validate both against **ZKB's test platform** (testplattform.zkb.ch) before going live.
 
+## Verification discipline (protocol correctness is a *spec* question, not just a code one)
+
+A wrong-but-self-consistent implementation passes every round-trip test — that is exactly how
+we shipped exclusive c14n instead of the mandated inclusive C14N 1.0 (see docs/08). To avoid
+repeating that class of bug:
+
+- **Cite the normative source.** Every protocol constant/structure — namespaces, algorithm URIs,
+  element names, order types, encodings — must trace to the H005 XSD or an EBICS spec section,
+  *not* to "how XML/crypto usually works" and *not* to another client. An uncited protocol claim
+  is a TODO, not a fact; flag it as unverified until checked.
+- **Check against an external oracle before calling a wire-format layer "done".** Round-trip
+  (sign→verify, encrypt→decrypt) proves consistency, never interoperability. Validate against at
+  least one *independent* authority: the XSD (`python tools/fetch-schemas.py`, then
+  `tests/test_schema_validation.py`), published spec vectors, or a second implementation
+  (`tools/php-parity/`). **Golden vectors must come from that authority — never hand-derived from
+  our own output.**
+- **Verify foundations earliest.** The more foundational the choice (algorithm, namespace, message
+  shape), the higher the confidence bar and the sooner it must be schema-checked — those errors
+  propagate furthest. Keep spec-uncertainty distinct from execution-uncertainty; don't hedge the
+  hard part while silently trusting the foundation.
+
 ## Scope discipline
 
 MVP = download-only: key init (INI/HIA/HPB) → fetch `EOP/camt.053.001.08` → parse closing balances.

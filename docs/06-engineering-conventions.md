@@ -154,13 +154,32 @@ def make_ini_letter(output_format: OutputFormat = OutputFormat.AUTO) -> Letter:
 
 ## Testing
 
+**Verification discipline — the rule that would have caught the c14n bug.** Protocol correctness is a
+*specification* question. A wrong-but-self-consistent implementation passes every round-trip test, which
+is exactly how the project initially shipped exclusive c14n instead of the mandated inclusive C14N 1.0
+(post-mortem in [doc 08](08-parity-and-xsd-findings.md)). Therefore:
+
+- **Cite the normative source** for every protocol constant/structure (namespace, algorithm URI, element
+  name, order type, encoding): the H005 XSD or an EBICS spec section — never "how XML/crypto usually
+  works" and never another client. Uncited protocol claims are TODOs, not facts.
+- **No wire-format layer is "done" until validated against an external oracle**, because round-trips prove
+  consistency, never interoperability. Use the XSD (`python tools/fetch-schemas.py` +
+  `tests/test_schema_validation.py`), published spec vectors, or a second implementation
+  (`tools/php-parity/`). **Golden vectors must come from that authority, never hand-derived from our own
+  output** (a mirror can't falsify the belief it reflects).
+- **Verify foundations earliest** — the more foundational the choice (algorithm, namespace, message
+  shape), the sooner it must be schema-checked; those errors propagate furthest.
+
 Two tiers:
 
 - **Unit (the bulk; runs in CI; no credentials).** Ephemeral generated keys, static fixtures, recorded
   responses — **CI never touches the live bank.**
-  - Crypto: round-trip tests (sign→verify, encrypt→decrypt).
-  - **Canonicalization (the #1 failure point):** golden-vector tests — byte-compare exc-c14n output against
-    known-good vectors; sanity-check behavior against `ebics-client-php` **without copying its code** (doc 02).
+  - Crypto: round-trip tests (sign→verify, encrypt→decrypt) — for *consistency*, paired with an external
+    oracle for *correctness*.
+  - **Canonicalization (the #1 failure point):** golden vectors derived from the C14N spec, plus
+    cross-implementation parity against `ebics-client-php` (**without copying its code**, doc 02) and
+    schema validation. The mandated algorithm is inclusive Canonical XML 1.0 (`REC-xml-c14n-20010315`).
+  - **Structure:** validate INI/HIA/HPB envelopes and order data against the H005 XSDs.
   - camt parsing: a sanitized real `camt.053.001.08` sample as a fixture.
 - **Integration (local-only, opt-in, never in CI).** Hits the **ZKB test platform** (testplattform.zkb.ch).
   - Marked `@pytest.mark.integration`, **excluded by default** (`-m "not integration"`); run with `-m integration`.
