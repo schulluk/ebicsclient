@@ -72,7 +72,7 @@ def test_ini_request_carries_host_and_user_ids(bank: Bank, user: User, keyring: 
     assert root.findtext(f".//{{{_NS}}}HostID") == bank.host_id
     assert root.findtext(f".//{{{_NS}}}PartnerID") == user.partner_id
     assert root.findtext(f".//{{{_NS}}}UserID") == user.user_id
-    assert root.findtext(f".//{{{_NS}}}OrderType") == "INI"
+    assert root.findtext(f".//{{{_NS}}}AdminOrderType") == "INI"
 
 
 def test_ini_order_data_carries_the_a006_signature_key(
@@ -89,7 +89,7 @@ def test_hia_request_carries_both_auth_and_encryption_keys(
     bank: Bank, user: User, keyring: Keyring
 ) -> None:
     root = etree.fromstring(h005.build_hia_request(bank, user, keyring))
-    assert root.findtext(f".//{{{_NS}}}OrderType") == "HIA"
+    assert root.findtext(f".//{{{_NS}}}AdminOrderType") == "HIA"
     order_data = _order_data(h005.build_hia_request(bank, user, keyring))
     assert order_data.findtext(f".//{{{_NS}}}AuthenticationVersion") == "X002"
     assert order_data.findtext(f".//{{{_NS}}}EncryptionVersion") == "E002"

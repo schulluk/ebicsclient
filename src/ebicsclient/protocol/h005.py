@@ -30,7 +30,6 @@ _NSMAP = cast("dict[str, str]", {None: NAMESPACE, "ds": _DS})
 
 _PROTOCOL_VERSION = "H005"
 _REVISION = "1"
-_ORDER_ATTRIBUTE = "DZNNN"  # key-management submission; verify against the H005 XSD
 _ADMIN_ORDER_TYPE_HPB = "HPB"  # H005 administrative order type for the bank-key download
 _SECURITY_MEDIUM = "0000"
 _OK_RETURN_CODE = "000000"
@@ -209,8 +208,7 @@ def _unsecured_request(bank: Bank, user: User, order_type: str, order_data: byte
     _text(static, "PartnerID", user.partner_id)
     _text(static, "UserID", user.user_id)
     order_details = etree.SubElement(static, etree.QName(NAMESPACE, "OrderDetails"))
-    _text(order_details, "OrderType", order_type)
-    _text(order_details, "OrderAttribute", _ORDER_ATTRIBUTE)
+    _text(order_details, "AdminOrderType", order_type)
     _text(static, "SecurityMedium", _SECURITY_MEDIUM)
     etree.SubElement(header, etree.QName(NAMESPACE, "mutable"))
 

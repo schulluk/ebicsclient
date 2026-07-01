@@ -52,14 +52,14 @@ def test_ini_posts_a_signature_key_request(keyring: Keyring) -> None:
     client, transport = _client(_OK_RESPONSE, keyring)
     client.ini()
     assert transport.posted is not None
-    assert etree.fromstring(transport.posted).findtext(f".//{{{_NS}}}OrderType") == "INI"
+    assert etree.fromstring(transport.posted).findtext(f".//{{{_NS}}}AdminOrderType") == "INI"
 
 
 def test_hia_posts_an_auth_and_encryption_request(keyring: Keyring) -> None:
     client, transport = _client(_OK_RESPONSE, keyring)
     client.hia()
     assert transport.posted is not None
-    assert etree.fromstring(transport.posted).findtext(f".//{{{_NS}}}OrderType") == "HIA"
+    assert etree.fromstring(transport.posted).findtext(f".//{{{_NS}}}AdminOrderType") == "HIA"
 
 
 def test_ini_raises_when_the_bank_rejects(keyring: Keyring) -> None:

@@ -41,8 +41,11 @@ never hardcode or commit them.
 ## The two parts that are easy to get wrong (budget your care here)
 
 1. **The authentication signature** — every `ebicsRequest` carries an XML-DSig (`AuthSignature`) over
-   the nodes marked `authenticate="true"`, using **exclusive XML canonicalization (exc-c14n)**, SHA-256
-   digest, RSA-SHA256 with the X002 key. Byte-exact canonicalization is the classic failure point.
+   the nodes marked `authenticate="true"`, using **inclusive Canonical XML 1.0**
+   (`http://www.w3.org/TR/2001/REC-xml-c14n-20010315`, *not* exclusive c14n — verified against the H005
+   XSD and an independent canonicaliser; see docs/08), SHA-256 digest, RSA-SHA256 with the X002 key.
+   Byte-exact canonicalization is the classic failure point, and lxml's inclusive c14n needs the
+   standalone-node workaround in `crypto.canonicalize` to be spec-correct.
 2. **Order-data encryption/decryption** — order data is deflate-compressed then AES-128-CBC encrypted
    with a random transaction key; that transaction key is RSA-encrypted to the E002 key. For download
    you reverse this with your E002 private key. Exact mode/padding matters.

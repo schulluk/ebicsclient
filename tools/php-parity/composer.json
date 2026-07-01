@@ -1,0 +1,11 @@
+{
+    "name": "ebicsclient/php-parity",
+    "description": "Dev-only tool: generate golden EBICS request vectors from ebics-client-php to cross-check the Python ebicsclient. Not part of the distributed package.",
+    "license": "PolyForm-Noncommercial-1.0.0",
+    "require": {
+        "ebics-api/ebics-client-php": "^3.0"
+    },
+    "config": {
+        "vendor-dir": "vendor"
+    }
+}

@@ -33,7 +33,8 @@ A subscriber holds three RSA key pairs:
 | Encryption | Encrypts/decrypts order data | **E002** |
 
 - **Auth signature** (`AuthSignature` in each `ebicsRequest`): XML-DSig over nodes with
-  `authenticate="true"`, **exclusive C14N (exc-c14n)**, SHA-256 digest, RSA-SHA256 with X002.
+  `authenticate="true"`, **inclusive Canonical XML 1.0** (`REC-xml-c14n-20010315`, *not* exclusive —
+  see docs/08), SHA-256 digest, RSA-SHA256 with X002.
 - **Order-data encryption**: payload is deflate-compressed → AES-128-CBC encrypted with a random
   *transaction key* → that transaction key is RSA-encrypted to the E002 key. For **download** you
   receive order data encrypted to *your* E002 public key; decrypt the transaction key with your E002

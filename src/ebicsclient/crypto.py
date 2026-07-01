@@ -1,19 +1,22 @@
 """Cryptographic mechanics for EBICS requests.
 
-Provides exclusive XML canonicalisation, SHA-256 digests, RSA-SHA256 signatures, and
+Provides inclusive XML canonicalisation, SHA-256 digests, RSA-SHA256 signatures, and
 the ``AuthSignature`` that every ``ebicsRequest`` carries over the nodes flagged
 ``authenticate="true"``.
 
 The authentication signature is the protocol's most failure-prone area — its security
-rests on *byte-exact* exclusive canonicalisation — so the mechanics live here in
-isolation and are exercised by signing and verifying our own requests.
+rests on *byte-exact* canonicalisation. EBICS mandates **inclusive Canonical XML 1.0**
+(``http://www.w3.org/TR/2001/REC-xml-c14n-20010315``) for both the CanonicalizationMethod
+and the Reference transform — confirmed against the EBICS Common Implementation Guide and
+the H005 XSD. This is *not* exclusive c14n.
 
 **Caveat:** a self round-trip proves internal consistency, not agreement with the bank.
-The exact digest construction must still be validated against a bank test platform
-before it can be trusted (see docs/01 and docs/04).
+The digest construction has been cross-checked against the H005 schema and an independent
+canonicaliser, but must still be validated against a bank test platform (see docs/01, 08).
 """
 
 import base64
+import copy
 import hashlib
 import zlib
 from typing import cast
@@ -29,7 +32,7 @@ from ebicsclient.errors import CryptoError
 
 # XML-DSig algorithm identifiers used by EBICS.
 _DS_NAMESPACE = "http://www.w3.org/2000/09/xmldsig#"
-_EXCLUSIVE_C14N = "http://www.w3.org/2001/10/xml-exc-c14n#"
+_INCLUSIVE_C14N = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
 _RSA_SHA256 = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
 _SHA256 = "http://www.w3.org/2001/04/xmlenc#sha256"
 
@@ -45,20 +48,35 @@ _REFERENCE_URI = "#xpointer(//*[@authenticate='true'])"
 _NULL_IV = b"\x00" * 16
 
 
-def canonicalize_exclusive(element: etree._Element) -> bytes:
-    """Serialise an element with Exclusive XML Canonicalization 1.0 (exc-c14n).
+def canonicalize(element: etree._Element) -> bytes:
+    """Serialise an element with inclusive Canonical XML 1.0 (the EBICS c14n).
 
-    This is the canonical form EBICS signs over. Exclusive c14n omits inherited but
-    unused namespace declarations, which keeps a signed fragment stable regardless of
-    the document it is embedded in.
+    EBICS signs over inclusive Canonical XML 1.0, which renders every in-scope namespace
+    (including inherited ones) on the apex of the canonicalised subtree.
+
+    lxml's ``method="c14n"`` mis-handles a subtree whose default namespace is declared on
+    an *ancestor* outside the subtree: it emits a spurious ``xmlns=""`` on same-namespace
+    descendants, producing bytes no spec-compliant canonicaliser agrees with. To avoid
+    that, the element is rebuilt as its own document root with all in-scope namespaces
+    (``element.nsmap`` already resolves inherited declarations) materialised on it; libxml
+    then canonicalises it correctly. Verified byte-for-byte against the H005 XSD context
+    and an independent canonicaliser (see docs/08).
 
     Args:
         element: The element subtree to canonicalise.
 
     Returns:
-        The exclusively-canonicalised XML as bytes.
+        The inclusively-canonicalised XML as bytes.
     """
-    canonical: bytes = etree.tostring(element, method="c14n", exclusive=True, with_comments=False)
+    # element.nsmap resolves inherited declarations, but its None default-namespace key
+    # trips lxml-stubs (which model nsmap keys as str); cast to satisfy the type checker.
+    nsmap = cast("dict[str, str]", element.nsmap)
+    standalone = etree.Element(element.tag, nsmap=nsmap)
+    for name, value in element.attrib.items():
+        standalone.set(name, value)
+    standalone.text = element.text
+    standalone.extend(copy.deepcopy(child) for child in element)
+    canonical: bytes = etree.tostring(standalone, method="c14n", with_comments=False)
     return canonical
 
 
@@ -135,7 +153,7 @@ def decrypt_order_data(
 def digest_authenticated_nodes(root: etree._Element) -> bytes:
     """Compute the SHA-256 digest that the AuthSignature signs over.
 
-    Every element marked ``authenticate="true"`` is exclusively canonicalised, in
+    Every element marked ``authenticate="true"`` is inclusively canonicalised, in
     document order; the canonical forms are concatenated and the SHA-256 of that
     concatenation is returned.
 
@@ -152,7 +170,7 @@ def digest_authenticated_nodes(root: etree._Element) -> bytes:
     if not isinstance(result, list) or not result:
         raise CryptoError('Request has no authenticate="true" nodes to sign')
     nodes = cast("list[etree._Element]", result)
-    concatenated = b"".join(canonicalize_exclusive(node) for node in nodes)
+    concatenated = b"".join(canonicalize(node) for node in nodes)
     return sha256_digest(concatenated)
 
 
@@ -182,7 +200,7 @@ def build_auth_signature(
     nsmap = cast("dict[str, str]", {None: ebics_namespace, "ds": _DS_NAMESPACE})
     auth_signature = etree.Element(etree.QName(ebics_namespace, "AuthSignature"), nsmap=nsmap)
     signed_info = _build_signed_info(auth_signature, digest_value)
-    signature = sign_rsa_sha256(private_key, canonicalize_exclusive(signed_info))
+    signature = sign_rsa_sha256(private_key, canonicalize(signed_info))
     signature_value = etree.SubElement(auth_signature, etree.QName(_DS_NAMESPACE, "SignatureValue"))
     signature_value.text = base64.b64encode(signature).decode("ascii")
     return auth_signature
@@ -215,13 +233,13 @@ def verify_auth_signature(root: etree._Element, public_key: rsa.RSAPublicKey) ->
         return False
 
     signature = base64.b64decode(signature_value.text)
-    return verify_rsa_sha256(public_key, canonicalize_exclusive(signed_info), signature)
+    return verify_rsa_sha256(public_key, canonicalize(signed_info), signature)
 
 
 def _build_signed_info(parent: etree._Element, digest_value: bytes) -> etree._Element:
     signed_info = etree.SubElement(parent, etree.QName(_DS_NAMESPACE, "SignedInfo"))
     etree.SubElement(
-        signed_info, etree.QName(_DS_NAMESPACE, "CanonicalizationMethod"), Algorithm=_EXCLUSIVE_C14N
+        signed_info, etree.QName(_DS_NAMESPACE, "CanonicalizationMethod"), Algorithm=_INCLUSIVE_C14N
     )
     etree.SubElement(
         signed_info, etree.QName(_DS_NAMESPACE, "SignatureMethod"), Algorithm=_RSA_SHA256
@@ -230,7 +248,7 @@ def _build_signed_info(parent: etree._Element, digest_value: bytes) -> etree._El
         signed_info, etree.QName(_DS_NAMESPACE, "Reference"), URI=_REFERENCE_URI
     )
     transforms = etree.SubElement(reference, etree.QName(_DS_NAMESPACE, "Transforms"))
-    etree.SubElement(transforms, etree.QName(_DS_NAMESPACE, "Transform"), Algorithm=_EXCLUSIVE_C14N)
+    etree.SubElement(transforms, etree.QName(_DS_NAMESPACE, "Transform"), Algorithm=_INCLUSIVE_C14N)
     etree.SubElement(reference, etree.QName(_DS_NAMESPACE, "DigestMethod"), Algorithm=_SHA256)
     digest_element = etree.SubElement(reference, etree.QName(_DS_NAMESPACE, "DigestValue"))
     digest_element.text = base64.b64encode(digest_value).decode("ascii")

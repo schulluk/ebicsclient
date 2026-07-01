@@ -18,6 +18,9 @@ venv/
 dist/
 build/
 
+# PHP parity tool — the recipe is committed, the fetched dependency is not
+tools/php-parity/vendor/
+
 # OS / editor
 .DS_Store
 .idea/

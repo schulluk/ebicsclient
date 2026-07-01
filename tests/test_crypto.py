@@ -40,13 +40,12 @@ def test_sign_and_verify_round_trip(keyring: Keyring) -> None:
     assert not crypto.verify_rsa_sha256(public_key, b"tampered", signature)
 
 
-def test_exclusive_c14n_drops_inherited_unused_namespaces() -> None:
-    # The defining property of exclusive c14n: an inherited but unused namespace
-    # declaration is not emitted on the canonicalised child.
+def test_inclusive_c14n_keeps_inherited_namespaces() -> None:
+    # EBICS uses inclusive Canonical XML 1.0: an in-scope (inherited) namespace IS
+    # emitted on the canonicalised apex — the opposite of exclusive c14n.
     doc = etree.fromstring(b'<a xmlns:unused="urn:x"><child>text</child></a>')
-    canonical = crypto.canonicalize_exclusive(doc[0])
-    assert b"unused" not in canonical
-    assert canonical == b"<child>text</child>"
+    canonical = crypto.canonicalize(doc[0])
+    assert canonical == b'<child xmlns:unused="urn:x">text</child>'
 
 
 def test_digest_authenticated_nodes_is_deterministic() -> None:

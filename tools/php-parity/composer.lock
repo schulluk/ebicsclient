@@ -1,0 +1,92 @@
+{
+    "_readme": [
+        "This file locks the dependencies of your project to a known state",
+        "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
+        "This file is @generated automatically"
+    ],
+    "content-hash": "12f2f9397e4105b9154c660ad1d0d3ca",
+    "packages": [
+        {
+            "name": "ebics-api/ebics-client-php",
+            "version": "3.1.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/ebics-api/ebics-client-php.git",
+                "reference": "568d2faafe67a47d0b2995c215aa2a49514c6bc9"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/ebics-api/ebics-client-php/zipball/568d2faafe67a47d0b2995c215aa2a49514c6bc9",
+                "reference": "568d2faafe67a47d0b2995c215aa2a49514c6bc9",
+                "shasum": ""
+            },
+            "require": {
+                "ext-bcmath": "*",
+                "ext-curl": "*",
+                "ext-dom": "*",
+                "ext-json": "*",
+                "ext-libxml": "*",
+                "ext-openssl": "*",
+                "ext-zip": "*",
+                "ext-zlib": "*",
+                "php": "^8.5"
+            },
+            "require-dev": {
+                "ebics-api/cfonb-php": "^1.0",
+                "ebics-api/mt942-php": "^1.0",
+                "phpstan/phpstan": "~2.1.50",
+                "phpunit/phpunit": "~13.1.7",
+                "psr/http-client": "^1.0",
+                "psr/http-factory": "^1.1",
+                "setasign/fpdf": "^1.8",
+                "squizlabs/php_codesniffer": "~3.13.5"
+            },
+            "suggest": {
+                "ebics-api/cfonb-php": "If you need to parse format CFONB from FDL requests.",
+                "ebics-api/mt942-php": "If you need to parse format MT942 from VMK, STA requests.",
+                "setasign/fpdf": "If you need to generate PDF file letter for Bank."
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "EbicsApi\\Ebics\\": "src"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Andrew Svirin"
+                }
+            ],
+            "description": "PHP library to communicate with bank through EBICS protocol.",
+            "keywords": [
+                "cfonb.120",
+                "cfonb.240",
+                "client",
+                "ebics",
+                "mt940",
+                "mt942",
+                "openssl",
+                "php",
+                "rsa",
+                "x509"
+            ],
+            "support": {
+                "source": "https://github.com/ebics-api/ebics-client-php/tree/v3.1.1"
+            },
+            "time": "2026-05-04T07:27:29+00:00"
+        }
+    ],
+    "packages-dev": [],
+    "aliases": [],
+    "minimum-stability": "stable",
+    "stability-flags": {},
+    "prefer-stable": false,
+    "prefer-lowest": false,
+    "platform": {},
+    "platform-dev": {},
+    "plugin-api-version": "2.9.0"
+}
