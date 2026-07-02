@@ -46,11 +46,19 @@ This is a money-moving library — the engineering bar is [docs/06-engineering-c
 **`cryptography` + `lxml`** only; **Python 3.11+**; MVP = **handshake + read-only download** (key
 ceremony → fetch `EOP/camt.053.001.08` → parse balances), with `protocol/` and `formats/` seams left for
 future EBICS versions / message formats (see [docs/04-implementation-plan.md](docs/04-implementation-plan.md)).
-Implemented so far: keys/keyring, the exception model, the authentication signature, the HTTPS transport,
-and the full **INI/HIA/HPB handshake** — including the initialisation letter (HTML, or PDF via the optional
-`pdf` extra) and order-data decryption. The handshake is covered by offline tests and ready for live
-validation against the ZKB test platform ([docs/07](docs/07-handshake-testing.md)); the statement download
-(`EOP/camt.053.001.08`) is next.
+
+- [x] ~~Key generation + encrypted keyring, and EBICS public-key hashes~~
+- [x] ~~Exception model with retryability classification~~
+- [x] ~~Authentication signature (inclusive Canonical XML 1.0 + RSA-SHA256)~~
+- [x] ~~HTTPS transport (TLS 1.2 floor, retryable error mapping)~~
+- [x] ~~INI/HIA/HPB handshake (key initialisation + bank-key download)~~
+- [x] ~~X.509 key transmission (EBICS 3.0 "mit Schlüsseln" self-signed certificates)~~
+- [x] ~~Initialisation letter (HTML, or PDF via the optional `pdf` extra)~~
+- [x] ~~Order-data decryption (RSA-unwrap + AES-128-CBC)~~
+- [x] ~~Offline verification: H005 XSD validation, C14N golden vectors, ebics-client-php parity~~
+- [ ] Live validation against the ZKB test platform ([docs/07](docs/07-handshake-testing.md))
+- [ ] Statement download — `EOP/camt.053.001.08` BTD transaction (initialise → transfer → receipt)
+- [ ] camt.053 parsing (closing balances)
 
 ## License
 

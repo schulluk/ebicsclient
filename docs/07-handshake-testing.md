@@ -22,17 +22,22 @@ is gitignored). Never commit them.
 
 ```dotenv
 EBICS_HOST_ID=<test Host ID>
-EBICS_URL=https://testplattform.zkb.ch/ebicsweb   # confirm the exact path with ZKB
+EBICS_URL=https://testplattform.zkb.ch/ebicsweb/ebicsweb   # note: /ebicsweb/ebicsweb
 EBICS_PARTNER_ID=<test Partner ID>
 EBICS_USER_ID=<test User ID>
 
 EBICS_KEYRING_PATH=../local/test-keyring.json
 EBICS_KEYRING_PASSPHRASE=<a passphrase you choose>
 
-# Optional: fill in once you know the test platform's bank-key hashes, to auto-verify HPB.
-EBICS_BANK_X002_HASH=
-EBICS_BANK_E002_HASH=
+# Verify HPB against the bank-key hashes ZKB publishes for the "mit Schlüsseln" profile.
+EBICS_BANK_X002_HASH=<from ZKB>
+EBICS_BANK_E002_HASH=<from ZKB>
 ```
+
+> **Profile.** ZKB offers EBICS 3.0 **"mit Schlüsseln"** (self-signed keys — what this client
+> implements) and **"mit Zertifikaten"** (CA certificates); each has *different* bank-key hashes.
+> Use the "mit Schlüsseln" hashes. **Download order type is `XTD`** on the test platform (it
+> returns test results), not the production `EOP/camt.053` BTF.
 
 ## 2. Install and sanity-check locally first
 
