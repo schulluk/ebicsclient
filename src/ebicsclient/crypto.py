@@ -23,7 +23,6 @@ from typing import cast
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives import padding as symmetric_padding
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from lxml import etree
@@ -122,8 +121,10 @@ def decrypt_order_data(
     """Decrypt and inflate EBICS order data.
 
     Reverses EBICS order-data protection: the RSA-encrypted transaction key is recovered
-    with the E002 private key, used as an AES key (CBC mode, null IV) to decrypt the order
-    data, then the plaintext is PKCS#7-unpadded and DEFLATE-inflated.
+    with the E002 private key and used as an AES key (CBC mode, null IV) to decrypt the
+    order data, which is then DEFLATE-inflated. EBICS pads the ciphertext to the AES block
+    size but *not* with PKCS#7, so the padding is not stripped explicitly — inflation stops
+    at the end of the compressed stream and ignores the trailing padding bytes.
 
     Args:
         encryption_key: The subscriber's E002 encryption private key.
@@ -142,10 +143,11 @@ def decrypt_order_data(
         raise CryptoError("Could not decrypt the EBICS transaction key") from error
     try:
         decryptor = Cipher(algorithms.AES(symmetric_key), modes.CBC(_NULL_IV)).decryptor()
-        padded = decryptor.update(encrypted_order_data) + decryptor.finalize()
-        unpadder = symmetric_padding.PKCS7(algorithms.AES.block_size).unpadder()
-        compressed = unpadder.update(padded) + unpadder.finalize()
-        return zlib.decompress(compressed)
+        compressed = decryptor.update(encrypted_order_data) + decryptor.finalize()
+        # The plaintext is a DEFLATE stream followed by block padding (not PKCS#7). Inflate
+        # it and let the decompressor stop at the end of the stream, ignoring the padding.
+        decompressor = zlib.decompressobj()
+        return decompressor.decompress(compressed) + decompressor.flush()
     except (ValueError, zlib.error) as error:
         raise CryptoError("Could not decrypt the EBICS order data") from error
 
