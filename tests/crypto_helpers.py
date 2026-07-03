@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.serialization import Encoding
 from lxml import etree
 
-from ebicsclient.keys import generate_self_signed_certificate
+from ebicsclient.keys import CertificateUsage, generate_self_signed_certificate
 from ebicsclient.models import Keyring
 from ebicsclient.protocol import h005
 
@@ -80,11 +80,11 @@ def _hpb_order_data(bank_keyring: Keyring, host_id: str) -> bytes:
     )
     _pub_key_info(
         root, "AuthenticationPubKeyInfo", "AuthenticationVersion", "X002",
-        bank_keyring.authentication,
+        bank_keyring.authentication, CertificateUsage.AUTHENTICATION,
     )
     _pub_key_info(
         root, "EncryptionPubKeyInfo", "EncryptionVersion", "E002",
-        bank_keyring.encryption,
+        bank_keyring.encryption, CertificateUsage.ENCRYPTION,
     )
     etree.SubElement(root, etree.QName(namespace, "HostID")).text = host_id
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
@@ -96,10 +96,11 @@ def _pub_key_info(
     version_tag: str,
     version: str,
     private_key: rsa.RSAPrivateKey,
+    usage: CertificateUsage,
 ) -> None:
     # H005 carries the bank key as an X.509 certificate, so the fixtures do too.
     namespace = h005.NAMESPACE
-    certificate = generate_self_signed_certificate(private_key, "BANK")
+    certificate = generate_self_signed_certificate(private_key, "BANK", usage)
     encoded = base64.b64encode(certificate.public_bytes(Encoding.DER)).decode("ascii")
     info = etree.SubElement(parent, etree.QName(namespace, info_tag))
     x509_data = etree.SubElement(info, etree.QName(_DS, "X509Data"))

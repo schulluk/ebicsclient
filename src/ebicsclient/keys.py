@@ -19,6 +19,7 @@ import datetime
 import hashlib
 import json
 import logging
+from enum import StrEnum
 from pathlib import Path
 
 from cryptography import x509
@@ -67,19 +68,46 @@ def generate_keyring(key_size: int = _MINIMUM_KEY_SIZE) -> Keyring:
     )
 
 
+class CertificateUsage(StrEnum):
+    """The EBICS role a certificate certifies, which fixes its X.509 Key Usage.
+
+    EBICS validates each certificate's Key Usage extension against its role and rejects a
+    mismatch (return code ``091210`` EBICS_X509_WRONG_KEY_USAGE).
+    """
+
+    SIGNATURE = "signature"  # A006 — nonRepudiation
+    AUTHENTICATION = "authentication"  # X002 — digitalSignature
+    ENCRYPTION = "encryption"  # E002 — keyEncipherment
+
+
+def _key_usage(usage: CertificateUsage) -> x509.KeyUsage:
+    return x509.KeyUsage(
+        digital_signature=usage is CertificateUsage.AUTHENTICATION,
+        content_commitment=usage is CertificateUsage.SIGNATURE,  # a.k.a. nonRepudiation
+        key_encipherment=usage is CertificateUsage.ENCRYPTION,
+        data_encipherment=False,
+        key_agreement=False,
+        key_cert_sign=False,
+        crl_sign=False,
+        encipher_only=False,
+        decipher_only=False,
+    )
+
+
 def generate_self_signed_certificate(
-    private_key: rsa.RSAPrivateKey, common_name: str
+    private_key: rsa.RSAPrivateKey, common_name: str, usage: CertificateUsage
 ) -> x509.Certificate:
     """Generate a self-signed X.509 certificate carrying an EBICS public key.
 
     EBICS 3.0 (H005) transmits public keys as X.509 certificates (``ds:X509Data``). In the
     key-based ("mit Schlüsseln") profile the certificate is self-signed by the very key it
-    carries, and the bank simply extracts the public key from it — the certificate's
-    subject, validity, and serial are not otherwise significant.
+    carries, and the bank extracts the public key from it. The bank *does* validate the
+    certificate's Key Usage against its EBICS role, so it is set from ``usage``.
 
     Args:
         private_key: The key pair to certify; its public half is embedded and it self-signs.
         common_name: The subject/issuer common name (e.g. the subscriber's User ID).
+        usage: The EBICS role, which fixes the certificate's Key Usage extension.
 
     Returns:
         The self-signed certificate.
@@ -94,6 +122,7 @@ def generate_self_signed_certificate(
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - datetime.timedelta(days=1))
         .not_valid_after(now + datetime.timedelta(days=_CERTIFICATE_VALIDITY_DAYS))
+        .add_extension(_key_usage(usage), critical=True)
         .sign(private_key, hashes.SHA256())
     )
 

@@ -58,7 +58,9 @@ def build_ini_request(bank: Bank, user: User, keyring: Keyring) -> bytes:
     Returns:
         The serialised ``ebicsUnsecuredRequest`` XML.
     """
-    certificate = keys.generate_self_signed_certificate(keyring.signature, user.user_id)
+    certificate = keys.generate_self_signed_certificate(
+        keyring.signature, user.user_id, keys.CertificateUsage.SIGNATURE
+    )
     order_data = _signature_pubkey_order_data(user, certificate)
     return _unsecured_request(bank, user, "INI", order_data)
 
@@ -74,8 +76,12 @@ def build_hia_request(bank: Bank, user: User, keyring: Keyring) -> bytes:
     Returns:
         The serialised ``ebicsUnsecuredRequest`` XML.
     """
-    authentication = keys.generate_self_signed_certificate(keyring.authentication, user.user_id)
-    encryption = keys.generate_self_signed_certificate(keyring.encryption, user.user_id)
+    authentication = keys.generate_self_signed_certificate(
+        keyring.authentication, user.user_id, keys.CertificateUsage.AUTHENTICATION
+    )
+    encryption = keys.generate_self_signed_certificate(
+        keyring.encryption, user.user_id, keys.CertificateUsage.ENCRYPTION
+    )
     order_data = _hia_request_order_data(user, authentication, encryption)
     return _unsecured_request(bank, user, "HIA", order_data)
 
@@ -164,12 +170,17 @@ def raise_for_return_code(response: bytes) -> None:
 
 
 def _check_return_code(root: etree._Element) -> None:
-    return_code = root.find(f".//{{{NAMESPACE}}}ReturnCode")
-    if return_code is None or return_code.text is None:
+    # An EBICS response carries a *technical* ReturnCode in the header (well-formedness) and
+    # the authoritative *order* ReturnCode in the body; both must be OK. Checking only the
+    # first would miss a body-level rejection reported behind a header OK.
+    return_codes = root.findall(f".//{{{NAMESPACE}}}ReturnCode")
+    if not return_codes:
         raise ProtocolError("EBICS response carried no ReturnCode")
-    if return_code.text != _OK_RETURN_CODE:
-        report = root.find(f".//{{{NAMESPACE}}}ReportText")
-        raise ReturnCodeError(return_code.text, report.text if report is not None else None)
+    for return_code in return_codes:
+        if return_code.text is not None and return_code.text != _OK_RETURN_CODE:
+            parent = return_code.getparent()
+            report = parent.find(f"{{{NAMESPACE}}}ReportText") if parent is not None else None
+            raise ReturnCodeError(return_code.text, report.text if report is not None else None)
 
 
 def _required_text(root: etree._Element, local_name: str) -> str:

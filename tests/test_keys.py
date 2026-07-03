@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
+from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from ebicsclient import keys
@@ -112,8 +113,14 @@ def test_load_keyring_from_a_missing_file_raises(tmp_path: Path) -> None:
 
 
 def test_self_signed_certificate_wraps_the_public_key(keyring: Keyring) -> None:
-    certificate = keys.generate_self_signed_certificate(keyring.signature, "USER1")
+    certificate = keys.generate_self_signed_certificate(
+        keyring.signature, "USER1", keys.CertificateUsage.SIGNATURE
+    )
     embedded = certificate.public_key()
     assert isinstance(embedded, rsa.RSAPublicKey)
     assert embedded.public_numbers() == keyring.signature.public_key().public_numbers()
     assert certificate.issuer == certificate.subject  # self-signed
+    # A006 signature certs must carry nonRepudiation (content_commitment) key usage.
+    key_usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
+    assert key_usage.content_commitment
+    assert not key_usage.digital_signature
