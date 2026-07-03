@@ -72,6 +72,19 @@ class BankKeys:
     encryption: rsa.RSAPublicKey
 
 
+class InitializationState(StrEnum):
+    """The outcome of submitting subscriber keys with INI or HIA.
+
+    - ``SUBMITTED``: the bank accepted and stored the keys.
+    - ``ALREADY_INITIALISED``: the subscriber was already in this state, so the keys were
+      not re-submitted (a handshake re-run). The bank reports this the same way it reports
+      an unknown subscriber, which would instead surface later at HPB.
+    """
+
+    SUBMITTED = "submitted"
+    ALREADY_INITIALISED = "already_initialised"
+
+
 class OutputFormat(StrEnum):
     """The rendering format for the initialisation letter.
 

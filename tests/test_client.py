@@ -7,7 +7,7 @@ from crypto_helpers import make_hpb_response
 from ebicsclient import keys
 from ebicsclient.client import Client
 from ebicsclient.errors import ReturnCodeError
-from ebicsclient.models import Bank, Keyring, OutputFormat, User
+from ebicsclient.models import Bank, InitializationState, Keyring, OutputFormat, User
 
 _NS = "urn:org:ebics:H005"
 _OK_RESPONSE = (
@@ -15,10 +15,18 @@ _OK_RESPONSE = (
     b"<header><mutable><ReturnCode>000000</ReturnCode></mutable></header>"
     b"<body><ReturnCode>000000</ReturnCode></body></ebicsKeyManagementResponse>"
 )
+# 061099 EBICS_INTERNAL_ERROR — a genuine hard rejection.
 _ERROR_RESPONSE = (
     b'<ebicsKeyManagementResponse xmlns="urn:org:ebics:H005">'
-    b"<header><mutable><ReturnCode>091002</ReturnCode></mutable></header>"
-    b"<body><ReturnCode>091002</ReturnCode></body></ebicsKeyManagementResponse>"
+    b"<header><mutable><ReturnCode>061099</ReturnCode></mutable></header>"
+    b"<body><ReturnCode>061099</ReturnCode></body></ebicsKeyManagementResponse>"
+)
+# 091002 EBICS_INVALID_USER_OR_USER_STATE — a re-run of an already-initialised subscriber.
+_ALREADY_INITIALISED_RESPONSE = (
+    b'<ebicsKeyManagementResponse xmlns="urn:org:ebics:H005">'
+    b"<header><mutable><ReturnCode>091002</ReturnCode>"
+    b"<ReportText>[EBICS_INVALID_USER_OR_USER_STATE]</ReportText></mutable></header>"
+    b"<body><ReturnCode>000000</ReturnCode></body></ebicsKeyManagementResponse>"
 )
 
 
@@ -50,9 +58,19 @@ def _client(response: bytes, keyring: Keyring) -> tuple[Client, _FakeTransport]:
 
 def test_ini_posts_a_signature_key_request(keyring: Keyring) -> None:
     client, transport = _client(_OK_RESPONSE, keyring)
-    client.ini()
+    assert client.ini() is InitializationState.SUBMITTED
     assert transport.posted is not None
     assert etree.fromstring(transport.posted).findtext(f".//{{{_NS}}}AdminOrderType") == "INI"
+
+
+def test_ini_reports_already_initialised_without_raising(keyring: Keyring) -> None:
+    client, _ = _client(_ALREADY_INITIALISED_RESPONSE, keyring)
+    assert client.ini() is InitializationState.ALREADY_INITIALISED
+
+
+def test_hia_reports_already_initialised_without_raising(keyring: Keyring) -> None:
+    client, _ = _client(_ALREADY_INITIALISED_RESPONSE, keyring)
+    assert client.hia() is InitializationState.ALREADY_INITIALISED
 
 
 def test_hia_posts_an_auth_and_encryption_request(keyring: Keyring) -> None:

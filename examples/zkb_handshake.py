@@ -51,6 +51,7 @@ from dotenv import load_dotenv
 from ebicsclient import (
     Bank,
     Client,
+    InitializationState,
     OutputFormat,
     User,
     generate_keyring,
@@ -95,14 +96,18 @@ def _generate() -> int:
 
 
 def _ini() -> int:
-    _build_client().ini()
-    print("INI accepted: the signature key (A006) was submitted.")
+    if _build_client().ini() is InitializationState.ALREADY_INITIALISED:
+        print("INI: subscriber already initialised — the signature key was not re-submitted.")
+    else:
+        print("INI accepted: the signature key (A006) was submitted.")
     return 0
 
 
 def _hia() -> int:
-    _build_client().hia()
-    print("HIA accepted: the authentication (X002) and encryption (E002) keys were submitted.")
+    if _build_client().hia() is InitializationState.ALREADY_INITIALISED:
+        print("HIA: subscriber already initialised — the keys were not re-submitted.")
+    else:
+        print("HIA accepted: the authentication (X002) and encryption (E002) keys were submitted.")
     return 0
 
 

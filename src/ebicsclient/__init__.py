@@ -29,7 +29,15 @@ from ebicsclient.keys import (
     save_keyring,
     serialize_keyring,
 )
-from ebicsclient.models import Bank, BankKeys, Keyring, Letter, OutputFormat, User
+from ebicsclient.models import (
+    Bank,
+    BankKeys,
+    InitializationState,
+    Keyring,
+    Letter,
+    OutputFormat,
+    User,
+)
 
 # A library must never configure logging — that is the application's job. Attach a
 # NullHandler so importing the package never emits "No handlers could be found"
@@ -47,6 +55,7 @@ __all__ = [
     "Client",
     "CryptoError",
     "EbicsError",
+    "InitializationState",
     "Keyring",
     "KeyringDecryptionError",
     "KeyringError",

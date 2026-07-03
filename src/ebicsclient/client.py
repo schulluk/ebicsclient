@@ -8,11 +8,25 @@ fetching the bank's keys (HPB) and downloading statements.
 import logging
 
 from ebicsclient import letter
-from ebicsclient.models import Bank, BankKeys, Keyring, Letter, OutputFormat, User
+from ebicsclient.errors import ReturnCodeError
+from ebicsclient.models import (
+    Bank,
+    BankKeys,
+    InitializationState,
+    Keyring,
+    Letter,
+    OutputFormat,
+    User,
+)
 from ebicsclient.protocol import h005
 from ebicsclient.transport import Transport
 
 logger = logging.getLogger(__name__)
+
+# EBICS_INVALID_USER_OR_USER_STATE — on a key-submission re-run this means the subscriber
+# is already initialised; it is also how the bank reports an unknown subscriber (which then
+# surfaces at HPB), so we identify it but do not treat a re-run as a hard failure.
+_SUBSCRIBER_STATE_INADMISSIBLE = "091002"
 
 
 class Client:
@@ -65,31 +79,58 @@ class Client:
             self._bank, self._user, self._keyring, output_format=output_format
         )
 
-    def ini(self) -> None:
+    def ini(self) -> InitializationState:
         """Send INI — submit the signature public key (A006) to the bank.
+
+        Idempotent: if the subscriber is already initialised the bank rejects the re-run
+        (return code ``091002``), which is reported as ``ALREADY_INITIALISED`` rather than
+        raised.
+
+        Returns:
+            Whether the key was newly submitted or the subscriber was already initialised.
 
         Raises:
             TransportError: the request could not be delivered.
             ProtocolError: the response could not be parsed.
-            ReturnCodeError: the bank rejected the submission.
+            ReturnCodeError: the bank rejected the submission for another reason.
         """
         logger.info("INI: submitting the signature key for user %s", self._user.user_id)
         request = h005.build_ini_request(self._bank, self._user, self._keyring)
-        h005.raise_for_return_code(self._transport.post(request))
+        return self._submit_keys(request, "INI")
 
-    def hia(self) -> None:
+    def hia(self) -> InitializationState:
         """Send HIA — submit the authentication (X002) and encryption (E002) public keys.
+
+        Idempotent in the same way as :meth:`ini`.
+
+        Returns:
+            Whether the keys were newly submitted or the subscriber was already initialised.
 
         Raises:
             TransportError: the request could not be delivered.
             ProtocolError: the response could not be parsed.
-            ReturnCodeError: the bank rejected the submission.
+            ReturnCodeError: the bank rejected the submission for another reason.
         """
         logger.info(
             "HIA: submitting the authentication and encryption keys for user %s", self._user.user_id
         )
         request = h005.build_hia_request(self._bank, self._user, self._keyring)
-        h005.raise_for_return_code(self._transport.post(request))
+        return self._submit_keys(request, "HIA")
+
+    def _submit_keys(self, request: bytes, order: str) -> InitializationState:
+        try:
+            h005.raise_for_return_code(self._transport.post(request))
+        except ReturnCodeError as error:
+            if error.code == _SUBSCRIBER_STATE_INADMISSIBLE:
+                logger.info(
+                    "%s: subscriber %s already initialised — %s",
+                    order,
+                    self._user.user_id,
+                    error.text,
+                )
+                return InitializationState.ALREADY_INITIALISED
+            raise
+        return InitializationState.SUBMITTED
 
     def hpb(self) -> BankKeys:
         """Send HPB — download, store, and return the bank's public keys.
