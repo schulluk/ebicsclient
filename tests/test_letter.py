@@ -1,6 +1,7 @@
 """Tests for ebicsclient.letter: HTML and PDF initialisation-letter rendering."""
 
 import datetime
+import re
 import sys
 
 import pytest
@@ -83,6 +84,26 @@ def test_explicit_pdf_renders_a_pdf(bank: Bank, user: User, keyring: Keyring) ->
     result = letter.make_ini_letter(bank, user, keyring, output_format=OutputFormat.PDF)
     assert result.output_format is OutputFormat.PDF
     assert result.content.startswith(b"%PDF")
+
+
+def test_pdf_letter_fits_on_a_single_page(bank: Bank, user: User, keyring: Keyring) -> None:
+    pytest.importorskip("reportlab")
+    content = letter.make_ini_letter(bank, user, keyring, output_format=OutputFormat.PDF).content
+    assert re.findall(rb"/Count (\d+)", content) == [b"1"]
+
+
+def test_html_shows_the_default_branding(bank: Bank, user: User, keyring: Keyring) -> None:
+    text = letter.make_ini_letter(
+        bank, user, keyring, output_format=OutputFormat.HTML
+    ).content.decode("utf-8")
+    assert "Generated with ebicsClient" in text
+
+
+def test_branding_is_configurable_and_escaped(bank: Bank, user: User, keyring: Keyring) -> None:
+    text = letter.make_ini_letter(
+        bank, user, keyring, output_format=OutputFormat.HTML, branding="Acme & Co"
+    ).content.decode("utf-8")
+    assert "Generated with Acme &amp; Co" in text
 
 
 def test_explicit_pdf_without_reportlab_raises(

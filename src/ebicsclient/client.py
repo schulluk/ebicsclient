@@ -59,7 +59,12 @@ class Client:
         """The bank's public keys once HPB has run, or ``None`` before then."""
         return self._bank_keys
 
-    def make_ini_letter(self, *, output_format: OutputFormat = OutputFormat.AUTO) -> Letter:
+    def make_ini_letter(
+        self,
+        *,
+        output_format: OutputFormat = OutputFormat.AUTO,
+        branding: str = "ebicsClient",
+    ) -> Letter:
         """Render the initialisation letter to print, sign, and send to the bank.
 
         The letter carries the subscriber's public-key hashes so the bank can verify, out
@@ -68,6 +73,7 @@ class Client:
         Args:
             output_format: The output format. ``AUTO`` renders PDF when the optional
                 ``pdf`` extra is installed, otherwise HTML.
+            branding: A name shown in the letter's footer; defaults to ``"ebicsClient"``.
 
         Returns:
             The rendered letter (format, media type, and content bytes).
@@ -76,7 +82,11 @@ class Client:
             MissingDependencyError: PDF output was requested without the ``pdf`` extra.
         """
         return letter.make_ini_letter(
-            self._bank, self._user, self._keyring, output_format=output_format
+            self._bank,
+            self._user,
+            self._keyring,
+            output_format=output_format,
+            branding=branding,
         )
 
     def ini(self) -> InitializationState:

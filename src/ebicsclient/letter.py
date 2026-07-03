@@ -39,6 +39,9 @@ class _KeyPanel:
     digest: str
 
 
+_DEFAULT_BRANDING = "ebicsClient"
+
+
 def make_ini_letter(
     bank: Bank,
     user: User,
@@ -46,6 +49,7 @@ def make_ini_letter(
     *,
     output_format: OutputFormat = OutputFormat.AUTO,
     created: datetime.date | None = None,
+    branding: str = _DEFAULT_BRANDING,
 ) -> Letter:
     """Render the initialisation letter for a subscriber's keyring.
 
@@ -56,6 +60,8 @@ def make_ini_letter(
         output_format: The output format. ``AUTO`` renders PDF when the optional ``pdf``
             extra is installed, otherwise HTML.
         created: The date printed on the letter; defaults to today.
+        branding: A name shown in the letter's footer (e.g. the downstream product name);
+            defaults to ``"ebicsClient"``.
 
     Returns:
         The rendered letter (its concrete format, media type, and content bytes).
@@ -67,12 +73,12 @@ def make_ini_letter(
     when = created if created is not None else datetime.date.today()
     panels = _key_panels(keyring)
     if resolved is OutputFormat.HTML:
-        content = _render_html(bank, user, panels, when)
+        content = _render_html(bank, user, panels, when, branding)
         return Letter(
             output_format=OutputFormat.HTML, media_type="text/html; charset=utf-8", content=content
         )
     if resolved is OutputFormat.PDF:
-        content = _render_pdf(bank, user, panels, when)
+        content = _render_pdf(bank, user, panels, when, branding)
         return Letter(
             output_format=OutputFormat.PDF, media_type="application/pdf", content=content
         )
@@ -124,7 +130,9 @@ def _grouped_hex_bytes(data: bytes) -> str:
     return " ".join(f"{byte:02X}" for byte in data)
 
 
-def _render_html(bank: Bank, user: User, panels: list[_KeyPanel], created: datetime.date) -> bytes:
+def _render_html(
+    bank: Bank, user: User, panels: list[_KeyPanel], created: datetime.date, branding: str
+) -> bytes:
     sections = "\n".join(
         _HTML_PANEL.substitute(
             title=html.escape(panel.title),
@@ -141,23 +149,31 @@ def _render_html(bank: Bank, user: User, panels: list[_KeyPanel], created: datet
         partner_id=html.escape(user.partner_id),
         user_id=html.escape(user.user_id),
         created=html.escape(created.isoformat()),
+        branding=html.escape(branding),
         panels=sections,
     )
     return document.encode("utf-8")
 
 
-def _render_pdf(bank: Bank, user: User, panels: list[_KeyPanel], created: datetime.date) -> bytes:
+def _render_pdf(
+    bank: Bank, user: User, panels: list[_KeyPanel], created: datetime.date, branding: str
+) -> bytes:
     try:
+        from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import cm
-        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+        from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer
     except ImportError as error:
         raise MissingDependencyError("PDF letter output", "pdf") from error
 
     styles = getSampleStyleSheet()
     label = styles["Normal"]
-    hex_style = ParagraphStyle("hex", parent=styles["Code"], fontSize=7, leading=9)
+    hex_style = ParagraphStyle("hex", parent=styles["Code"], fontSize=7, leading=8.5)
+    heading_style = ParagraphStyle(
+        "keyheading", parent=styles["Heading2"], spaceBefore=8, spaceAfter=3
+    )
+    footer_style = ParagraphStyle("footer", parent=label, fontSize=8, textColor=colors.grey)
 
     story = [
         Paragraph("EBICS Initialisation Letter", styles["Title"]),
@@ -166,29 +182,36 @@ def _render_pdf(bank: Bank, user: User, panels: list[_KeyPanel], created: dateti
             "electronically, then sign and return this letter to your bank.",
             label,
         ),
-        Spacer(1, 0.4 * cm),
+        Spacer(1, 0.3 * cm),
         Paragraph(f"<b>Host ID:</b> {html.escape(bank.host_id)}", label),
         Paragraph(f"<b>Partner ID:</b> {html.escape(user.partner_id)}", label),
         Paragraph(f"<b>User ID:</b> {html.escape(user.user_id)}", label),
         Paragraph(f"<b>Date:</b> {html.escape(created.isoformat())}", label),
-        Spacer(1, 0.4 * cm),
+        Spacer(1, 0.2 * cm),
     ]
     for panel in panels:
         heading = f"{html.escape(panel.title)} ({html.escape(panel.version)})"
-        story.append(Paragraph(heading, styles["Heading2"]))
+        story.append(Paragraph(heading, heading_style))
         story.append(Paragraph("<b>Exponent</b>", label))
         story.append(Paragraph(html.escape(panel.exponent), hex_style))
         story.append(Paragraph("<b>Modulus</b>", label))
         story.append(Paragraph(html.escape(panel.modulus), hex_style))
         story.append(Paragraph(f"<b>{_HASH_ALGORITHM} hash</b>", label))
         story.append(Paragraph(html.escape(panel.digest), hex_style))
-        story.append(Spacer(1, 0.3 * cm))
 
-    story.append(Spacer(1, 1 * cm))
-    story.append(Paragraph("Place, date: ______________________________", label))
-    story.append(Spacer(1, 0.8 * cm))
+    # Keep the signature block together so it never splits across a page.
+    signature = html.escape(user.user_id)
     story.append(
-        Paragraph(f"Signature ({html.escape(user.user_id)}): ______________________________", label)
+        KeepTogether(
+            [
+                Spacer(1, 0.5 * cm),
+                Paragraph("Place, date: ______________________________", label),
+                Spacer(1, 0.5 * cm),
+                Paragraph(f"Signature ({signature}): ______________________________", label),
+                Spacer(1, 0.4 * cm),
+                Paragraph(f"Generated with {html.escape(branding)}", footer_style),
+            ]
+        )
     )
 
     buffer = io.BytesIO()
@@ -196,10 +219,10 @@ def _render_pdf(bank: Bank, user: User, panels: list[_KeyPanel], created: dateti
         buffer,
         pagesize=A4,
         title="EBICS Initialisation Letter",
-        leftMargin=2.5 * cm,
-        rightMargin=2.5 * cm,
-        topMargin=2.5 * cm,
-        bottomMargin=2.5 * cm,
+        leftMargin=2 * cm,
+        rightMargin=2 * cm,
+        topMargin=1.8 * cm,
+        bottomMargin=1.8 * cm,
     )
     document.build(story)
     return buffer.getvalue()
@@ -234,6 +257,7 @@ _HTML_DOCUMENT = Template(
   table.meta td { padding-right: 1.5em; }
   .sign { margin-top: 2em; }
   .line { border-top: 1px solid #000; width: 8cm; margin-top: 2.5em; padding-top: 0.3em; }
+  .branding { margin-top: 2em; color: #888; font-size: 9pt; }
 </style>
 </head>
 <body>
@@ -251,6 +275,7 @@ $panels
   <div class="line">Place, date</div>
   <div class="line">Signature ($user_id)</div>
 </div>
+<div class="branding">Generated with $branding</div>
 </body>
 </html>
 """
