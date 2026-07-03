@@ -163,7 +163,14 @@ def _render_pdf(
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import cm
-        from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer
+        from reportlab.platypus import (
+            KeepTogether,
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+        )
     except ImportError as error:
         raise MissingDependencyError("PDF letter output", "pdf") from error
 
@@ -175,6 +182,30 @@ def _render_pdf(
     )
     footer_style = ParagraphStyle("footer", parent=label, fontSize=8, textColor=colors.grey)
 
+    # Labels and values in two columns so the values line up vertically.
+    meta = Table(
+        [
+            ["Host ID:", bank.host_id],
+            ["Partner ID:", user.partner_id],
+            ["User ID:", user.user_id],
+            ["Date:", created.isoformat()],
+        ],
+        colWidths=[3 * cm, 13 * cm],
+        hAlign="LEFT",
+    )
+    meta.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 1),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]
+        )
+    )
+
     story = [
         Paragraph("EBICS Initialisation Letter", styles["Title"]),
         Paragraph(
@@ -183,10 +214,7 @@ def _render_pdf(
             label,
         ),
         Spacer(1, 0.3 * cm),
-        Paragraph(f"<b>Host ID:</b> {html.escape(bank.host_id)}", label),
-        Paragraph(f"<b>Partner ID:</b> {html.escape(user.partner_id)}", label),
-        Paragraph(f"<b>User ID:</b> {html.escape(user.user_id)}", label),
-        Paragraph(f"<b>Date:</b> {html.escape(created.isoformat())}", label),
+        meta,
         Spacer(1, 0.2 * cm),
     ]
     for panel in panels:
@@ -199,15 +227,35 @@ def _render_pdf(
         story.append(Paragraph(f"<b>{_HASH_ALGORITHM} hash</b>", label))
         story.append(Paragraph(html.escape(panel.digest), hex_style))
 
-    # Keep the signature block together so it never splits across a page.
-    signature = html.escape(user.user_id)
+    # Two signature fields side by side: a blank line to write on, with a small caption
+    # of what to write beneath it. Kept together so it never splits across a page.
+    signatures = Table(
+        [
+            ["", "", ""],
+            ["Place, date", "", f"Signature ({user.user_id})"],
+        ],
+        colWidths=[7 * cm, 1.5 * cm, 7 * cm],
+        rowHeights=[1.3 * cm, 0.5 * cm],
+        hAlign="LEFT",
+    )
+    signatures.setStyle(
+        TableStyle(
+            [
+                ("LINEBELOW", (0, 0), (0, 0), 0.5, colors.black),
+                ("LINEBELOW", (2, 0), (2, 0), 0.5, colors.black),
+                ("FONTSIZE", (0, 1), (-1, 1), 8),
+                ("TEXTCOLOR", (0, 1), (-1, 1), colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 1), (-1, 1), 2),
+            ]
+        )
+    )
     story.append(
         KeepTogether(
             [
-                Spacer(1, 0.5 * cm),
-                Paragraph("Place, date: ______________________________", label),
-                Spacer(1, 0.5 * cm),
-                Paragraph(f"Signature ({signature}): ______________________________", label),
+                Spacer(1, 0.6 * cm),
+                signatures,
                 Spacer(1, 0.4 * cm),
                 Paragraph(f"Generated with {html.escape(branding)}", footer_style),
             ]
@@ -254,9 +302,13 @@ _HTML_DOCUMENT = Template(
   dt { font-weight: bold; margin-top: 0.4em; }
   dd { margin: 0; }
   .hex { font-family: "Courier New", monospace; font-size: 9pt; word-break: break-all; }
-  table.meta td { padding-right: 1.5em; }
-  .sign { margin-top: 2em; }
-  .line { border-top: 1px solid #000; width: 8cm; margin-top: 2.5em; padding-top: 0.3em; }
+  table.meta td { padding-right: 1.5em; vertical-align: top; }
+  table.meta td.value { font-weight: normal; }
+  table.sign { margin-top: 3em; border-collapse: collapse; }
+  table.sign td.field { width: 7cm; vertical-align: bottom; }
+  table.sign td.gap { width: 1.5cm; }
+  .sigline { border-bottom: 1px solid #000; height: 3em; }
+  .siglabel { font-size: 8pt; color: #555; padding-top: 0.3em; }
   .branding { margin-top: 2em; color: #888; font-size: 9pt; }
 </style>
 </head>
@@ -265,16 +317,23 @@ _HTML_DOCUMENT = Template(
 <p>Please verify the public-key hashes below against the keys received electronically,
 then sign and return this letter to your bank.</p>
 <table class="meta">
-  <tr><td><strong>Host ID</strong></td><td>$host_id</td></tr>
-  <tr><td><strong>Partner ID</strong></td><td>$partner_id</td></tr>
-  <tr><td><strong>User ID</strong></td><td>$user_id</td></tr>
-  <tr><td><strong>Date</strong></td><td>$created</td></tr>
+  <tr><td><strong>Host ID</strong></td><td class="value">$host_id</td></tr>
+  <tr><td><strong>Partner ID</strong></td><td class="value">$partner_id</td></tr>
+  <tr><td><strong>User ID</strong></td><td class="value">$user_id</td></tr>
+  <tr><td><strong>Date</strong></td><td class="value">$created</td></tr>
 </table>
 $panels
-<div class="sign">
-  <div class="line">Place, date</div>
-  <div class="line">Signature ($user_id)</div>
-</div>
+<table class="sign">
+  <tr>
+    <td class="field">
+      <div class="sigline"></div><div class="siglabel">Place, date</div>
+    </td>
+    <td class="gap"></td>
+    <td class="field">
+      <div class="sigline"></div><div class="siglabel">Signature ($user_id)</div>
+    </td>
+  </tr>
+</table>
 <div class="branding">Generated with $branding</div>
 </body>
 </html>
