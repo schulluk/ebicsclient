@@ -9,6 +9,11 @@ import base64
 import logging
 
 from ebicsclient import crypto, letter
+from ebicsclient.certificates import (
+    DEFAULT_CERTIFICATE_PROVIDER,
+    BankCertificateVerifier,
+    CertificateProvider,
+)
 from ebicsclient.errors import ClientStateError, ReturnCodeError
 from ebicsclient.formats import camt053
 from ebicsclient.models import (
@@ -44,6 +49,8 @@ class Client:
         keyring: Keyring,
         *,
         transport: Transport | None = None,
+        certificate_provider: CertificateProvider = DEFAULT_CERTIFICATE_PROVIDER,
+        bank_certificate_verifier: BankCertificateVerifier | None = None,
     ) -> None:
         """Configure the client.
 
@@ -52,11 +59,20 @@ class Client:
             user: The subscriber's identifiers.
             keyring: The subscriber's key pairs.
             transport: Transport to use; defaults to an HTTPS transport for ``bank.url``.
+            certificate_provider: Supplies the subscriber's certificates for INI/HIA. Defaults
+                to self-signed certificates (the "mit Schlüsseln" profile); pass a
+                :class:`~ebicsclient.certificates.MappingCertificateProvider` (or your own) with
+                CA-issued certificates for the "mit Zertifikaten" profile.
+            bank_certificate_verifier: If given, validates the bank's certificates during HPB
+                (e.g. :class:`~ebicsclient.certificates.TrustAnchorVerifier`). ``None`` skips
+                chain validation; you must still verify the published bank-key hashes.
         """
         self._bank = bank
         self._user = user
         self._keyring = keyring
         self._transport = transport if transport is not None else Transport(bank.url)
+        self._certificate_provider = certificate_provider
+        self._bank_certificate_verifier = bank_certificate_verifier
         self._bank_keys: BankKeys | None = None
 
     @property
@@ -110,7 +126,9 @@ class Client:
             ReturnCodeError: the bank rejected the submission for another reason.
         """
         logger.info("INI: submitting the signature key for user %s", self._user.user_id)
-        request = h005.build_ini_request(self._bank, self._user, self._keyring)
+        request = h005.build_ini_request(
+            self._bank, self._user, self._keyring, self._certificate_provider
+        )
         return self._submit_keys(request, "INI")
 
     def hia(self) -> InitializationState:
@@ -129,7 +147,9 @@ class Client:
         logger.info(
             "HIA: submitting the authentication and encryption keys for user %s", self._user.user_id
         )
-        request = h005.build_hia_request(self._bank, self._user, self._keyring)
+        request = h005.build_hia_request(
+            self._bank, self._user, self._keyring, self._certificate_provider
+        )
         return self._submit_keys(request, "HIA")
 
     def _submit_keys(self, request: bytes, order: str) -> InitializationState:
@@ -167,7 +187,7 @@ class Client:
         logger.info("HPB: requesting the bank's public keys from host %s", self._bank.host_id)
         request = h005.build_hpb_request(self._bank, self._user, self._keyring)
         authentication, encryption = h005.parse_hpb_response(
-            self._transport.post(request), self._keyring
+            self._transport.post(request), self._keyring, self._bank_certificate_verifier
         )
         self._bank_keys = BankKeys(authentication=authentication, encryption=encryption)
         return self._bank_keys

@@ -23,6 +23,11 @@ from cryptography.hazmat.primitives.serialization import Encoding
 from lxml import etree
 
 from ebicsclient import crypto, keys
+from ebicsclient.certificates import (
+    DEFAULT_CERTIFICATE_PROVIDER,
+    BankCertificateVerifier,
+    CertificateProvider,
+)
 from ebicsclient.errors import ProtocolError, ReturnCodeError
 from ebicsclient.models import (
     Bank,
@@ -61,40 +66,55 @@ _AUTHENTICATION_VERSION = "X002"
 _ENCRYPTION_VERSION = "E002"
 
 
-def build_ini_request(bank: Bank, user: User, keyring: Keyring) -> bytes:
+def build_ini_request(
+    bank: Bank,
+    user: User,
+    keyring: Keyring,
+    certificate_provider: CertificateProvider = DEFAULT_CERTIFICATE_PROVIDER,
+) -> bytes:
     """Build the INI request submitting the signature public key (A006).
 
     Args:
         bank: The target bank.
         user: The subscriber.
         keyring: The subscriber's key pairs.
+        certificate_provider: Supplies the signature certificate. Defaults to self-signed
+            (the "mit Schlüsseln" profile); pass a CA-issued provider for "mit Zertifikaten".
 
     Returns:
         The serialised ``ebicsUnsecuredRequest`` XML.
     """
-    certificate = keys.generate_self_signed_certificate(
-        keyring.signature, user.user_id, keys.CertificateUsage.SIGNATURE
+    certificate = certificate_provider.certificate(
+        keys.CertificateUsage.SIGNATURE, keyring.signature, user.user_id
     )
     order_data = _signature_pubkey_order_data(user, certificate)
     return _unsecured_request(bank, user, "INI", order_data)
 
 
-def build_hia_request(bank: Bank, user: User, keyring: Keyring) -> bytes:
+def build_hia_request(
+    bank: Bank,
+    user: User,
+    keyring: Keyring,
+    certificate_provider: CertificateProvider = DEFAULT_CERTIFICATE_PROVIDER,
+) -> bytes:
     """Build the HIA request submitting the authentication (X002) and encryption (E002) keys.
 
     Args:
         bank: The target bank.
         user: The subscriber.
         keyring: The subscriber's key pairs.
+        certificate_provider: Supplies the authentication and encryption certificates. Defaults
+            to self-signed (the "mit Schlüsseln" profile); pass a CA-issued provider for
+            "mit Zertifikaten".
 
     Returns:
         The serialised ``ebicsUnsecuredRequest`` XML.
     """
-    authentication = keys.generate_self_signed_certificate(
-        keyring.authentication, user.user_id, keys.CertificateUsage.AUTHENTICATION
+    authentication = certificate_provider.certificate(
+        keys.CertificateUsage.AUTHENTICATION, keyring.authentication, user.user_id
     )
-    encryption = keys.generate_self_signed_certificate(
-        keyring.encryption, user.user_id, keys.CertificateUsage.ENCRYPTION
+    encryption = certificate_provider.certificate(
+        keys.CertificateUsage.ENCRYPTION, keyring.encryption, user.user_id
     )
     order_data = _hia_request_order_data(user, authentication, encryption)
     return _unsecured_request(bank, user, "HIA", order_data)
@@ -140,13 +160,18 @@ def build_hpb_request(bank: Bank, user: User, keyring: Keyring) -> bytes:
 
 
 def parse_hpb_response(
-    response: bytes, keyring: Keyring
+    response: bytes,
+    keyring: Keyring,
+    bank_certificate_verifier: BankCertificateVerifier | None = None,
 ) -> tuple[rsa.RSAPublicKey, rsa.RSAPublicKey]:
     """Decrypt an HPB response and extract the bank's public keys.
 
     Args:
         response: The raw ``ebicsKeyManagementResponse`` bytes from the bank.
         keyring: The subscriber's key pairs (the E002 key decrypts the response).
+        bank_certificate_verifier: If given, validates each bank certificate before its key
+            is trusted (the "mit Zertifikaten" profile). ``None`` extracts the keys without
+            chain validation; the caller must still verify the published hashes out of band.
 
     Returns:
         The bank's authentication (X002) and encryption (E002) public keys, in that order.
@@ -154,6 +179,7 @@ def parse_hpb_response(
     Raises:
         ProtocolError: the response could not be parsed or is missing required elements.
         ReturnCodeError: the bank reported a non-OK return code.
+        BankCertificateError: a bank certificate failed verification.
         CryptoError: the response order data could not be decrypted.
     """
     root = _parse(response)
@@ -165,8 +191,18 @@ def parse_hpb_response(
     )
     bank_keys = _parse(order_data)
     return (
-        _public_key_from_info(bank_keys, "AuthenticationPubKeyInfo"),
-        _public_key_from_info(bank_keys, "EncryptionPubKeyInfo"),
+        _public_key_from_info(
+            bank_keys,
+            "AuthenticationPubKeyInfo",
+            keys.CertificateUsage.AUTHENTICATION,
+            bank_certificate_verifier,
+        ),
+        _public_key_from_info(
+            bank_keys,
+            "EncryptionPubKeyInfo",
+            keys.CertificateUsage.ENCRYPTION,
+            bank_certificate_verifier,
+        ),
     )
 
 
@@ -439,7 +475,12 @@ def _required_text(root: etree._Element, local_name: str) -> str:
     return text
 
 
-def _public_key_from_info(root: etree._Element, info_tag: str) -> rsa.RSAPublicKey:
+def _public_key_from_info(
+    root: etree._Element,
+    info_tag: str,
+    usage: keys.CertificateUsage,
+    verifier: BankCertificateVerifier | None,
+) -> rsa.RSAPublicKey:
     info = root.find(f".//{{{NAMESPACE}}}{info_tag}")
     if info is None:
         raise ProtocolError(f"HPB response is missing <{info_tag}>")
@@ -447,15 +488,27 @@ def _public_key_from_info(root: etree._Element, info_tag: str) -> rsa.RSAPublicK
     # in case a bank sends the legacy representation.
     certificate = info.findtext(f".//{{{_DS}}}X509Certificate")
     if certificate is not None:
-        return _public_key_from_certificate(certificate, info_tag)
+        return _public_key_from_certificate(certificate, info_tag, usage, verifier)
+    if verifier is not None:
+        # A verifier was required but the bank sent a bare key with no certificate to check.
+        raise ProtocolError(
+            f"HPB response <{info_tag}> carries no certificate to verify"
+        )
     return _public_key_from_rsa_key_value(info, info_tag)
 
 
-def _public_key_from_certificate(certificate_base64: str, info_tag: str) -> rsa.RSAPublicKey:
+def _public_key_from_certificate(
+    certificate_base64: str,
+    info_tag: str,
+    usage: keys.CertificateUsage,
+    verifier: BankCertificateVerifier | None,
+) -> rsa.RSAPublicKey:
     try:
         certificate = x509.load_der_x509_certificate(base64.b64decode(certificate_base64))
     except ValueError as error:
         raise ProtocolError(f"HPB response <{info_tag}> has an unreadable certificate") from error
+    if verifier is not None:
+        verifier.verify(certificate, usage)
     public_key = certificate.public_key()
     if not isinstance(public_key, rsa.RSAPublicKey):
         raise ProtocolError(f"HPB response <{info_tag}> certificate does not hold an RSA key")

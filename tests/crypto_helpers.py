@@ -7,21 +7,74 @@ round trip proves the two are inverses.
 """
 
 import base64
+import datetime
 import os
 import zlib
+from collections.abc import Mapping
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import padding as symmetric_padding
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.serialization import Encoding
+from cryptography.x509.oid import NameOID
 from lxml import etree
 
+from ebicsclient import keys as _keys
 from ebicsclient.keys import CertificateUsage, generate_self_signed_certificate
 from ebicsclient.models import Keyring
 from ebicsclient.protocol import h005
 
 _NULL_IV = b"\x00" * 16
 _DS = "http://www.w3.org/2000/09/xmldsig#"
+
+
+def make_ca(common_name: str = "Test CA") -> tuple[rsa.RSAPrivateKey, x509.Certificate]:
+    """Create a self-signed CA key pair and certificate for issuing subscriber/bank certs."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    now = datetime.datetime.now(datetime.UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return key, certificate
+
+
+def issue_certificate(
+    ca_key: rsa.RSAPrivateKey,
+    ca_certificate: x509.Certificate,
+    public_key: rsa.RSAPublicKey,
+    usage: CertificateUsage,
+    *,
+    valid: bool = True,
+) -> x509.Certificate:
+    """Issue a CA-signed end-entity certificate for ``public_key`` with the EBICS Key Usage."""
+    now = datetime.datetime.now(datetime.UTC)
+    not_before, not_after = (
+        (now - datetime.timedelta(days=1), now + datetime.timedelta(days=365))
+        if valid
+        else (now - datetime.timedelta(days=365), now - datetime.timedelta(days=1))
+    )
+    return (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "SUBSCRIBER")]))
+        .issuer_name(ca_certificate.subject)
+        .public_key(public_key)
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(not_before)
+        .not_valid_after(not_after)
+        .add_extension(_keys._key_usage(usage), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
 
 
 def encrypt_order_data(
@@ -150,10 +203,19 @@ def _receipt_response() -> bytes:
 
 
 def make_hpb_response(
-    subscriber_keyring: Keyring, bank_keyring: Keyring, *, host_id: str = "ZKBKCHZZ"
+    subscriber_keyring: Keyring,
+    bank_keyring: Keyring,
+    *,
+    host_id: str = "ZKBKCHZZ",
+    certificates: Mapping[CertificateUsage, x509.Certificate] | None = None,
 ) -> bytes:
-    """Build an OK HPB response carrying the bank's keys, encrypted to the subscriber."""
-    order_data = _hpb_order_data(bank_keyring, host_id)
+    """Build an OK HPB response carrying the bank's keys, encrypted to the subscriber.
+
+    By default the bank keys are wrapped in self-signed certificates (the "mit Schlüsseln"
+    profile). Pass ``certificates`` (keyed by usage) to embed CA-issued certificates instead,
+    to exercise the "mit Zertifikaten" verification path.
+    """
+    order_data = _hpb_order_data(bank_keyring, host_id, certificates)
     transaction_key, encrypted = encrypt_order_data(
         subscriber_keyring.encryption.public_key(), order_data
     )
@@ -180,18 +242,25 @@ def make_hpb_response(
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
-def _hpb_order_data(bank_keyring: Keyring, host_id: str) -> bytes:
+def _hpb_order_data(
+    bank_keyring: Keyring,
+    host_id: str,
+    certificates: Mapping[CertificateUsage, x509.Certificate] | None,
+) -> bytes:
     namespace = h005.NAMESPACE
+    certificates = certificates or {}
     root = etree.Element(
         etree.QName(namespace, "HPBResponseOrderData"), nsmap={None: namespace, "ds": _DS}
     )
     _pub_key_info(
         root, "AuthenticationPubKeyInfo", "AuthenticationVersion", "X002",
         bank_keyring.authentication, CertificateUsage.AUTHENTICATION,
+        certificates.get(CertificateUsage.AUTHENTICATION),
     )
     _pub_key_info(
         root, "EncryptionPubKeyInfo", "EncryptionVersion", "E002",
         bank_keyring.encryption, CertificateUsage.ENCRYPTION,
+        certificates.get(CertificateUsage.ENCRYPTION),
     )
     etree.SubElement(root, etree.QName(namespace, "HostID")).text = host_id
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
@@ -204,10 +273,12 @@ def _pub_key_info(
     version: str,
     private_key: rsa.RSAPrivateKey,
     usage: CertificateUsage,
+    certificate: x509.Certificate | None = None,
 ) -> None:
     # H005 carries the bank key as an X.509 certificate, so the fixtures do too.
     namespace = h005.NAMESPACE
-    certificate = generate_self_signed_certificate(private_key, "BANK", usage)
+    if certificate is None:
+        certificate = generate_self_signed_certificate(private_key, "BANK", usage)
     encoded = base64.b64encode(certificate.public_bytes(Encoding.DER)).decode("ascii")
     info = etree.SubElement(parent, etree.QName(namespace, info_tag))
     x509_data = etree.SubElement(info, etree.QName(_DS, "X509Data"))

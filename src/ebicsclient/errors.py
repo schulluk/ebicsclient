@@ -66,6 +66,15 @@ class CryptoError(EbicsError):
     """A cryptographic operation failed (key handling, signing, encryption)."""
 
 
+class CertificateError(CryptoError):
+    """A subscriber certificate could not be provided or does not match its key.
+
+    Raised by a :class:`~ebicsclient.certificates.CertificateProvider` — for example when a
+    caller-supplied ("mit Zertifikaten") certificate is missing for a key, or its public key
+    does not match the private key it is meant to certify (which the bank would reject).
+    """
+
+
 class KeyringError(CryptoError):
     """The keyring could not be created, serialised, written, read, or decrypted."""
 
@@ -114,6 +123,15 @@ class TransportError(EbicsError):
 
 class ProtocolError(EbicsError):
     """The bank's response violated the expected EBICS protocol or could not be parsed."""
+
+
+class BankCertificateError(ProtocolError):
+    """The bank's certificate from the HPB response failed verification.
+
+    Raised by a :class:`~ebicsclient.certificates.BankCertificateVerifier` when the bank's
+    certificate is outside its validity period or does not chain to a trusted anchor. The
+    keys must not be trusted — fail closed rather than proceed.
+    """
 
 
 class ReturnCodeError(ProtocolError):

@@ -12,9 +12,11 @@ from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 from lxml import etree
 
-from crypto_helpers import make_hpb_response
+from crypto_helpers import issue_certificate, make_ca, make_hpb_response
 from ebicsclient import crypto, keys
-from ebicsclient.errors import ProtocolError, ReturnCodeError
+from ebicsclient.certificates import MappingCertificateProvider, TrustAnchorVerifier
+from ebicsclient.errors import BankCertificateError, ProtocolError, ReturnCodeError
+from ebicsclient.keys import CertificateUsage
 from ebicsclient.models import Bank, Keyring, User
 from ebicsclient.protocol import h005
 
@@ -151,6 +153,82 @@ def test_parse_hpb_response_raises_on_a_non_ok_return_code(keyring: Keyring) -> 
         h005.parse_hpb_response(_ERROR_RESPONSE, keyring)
 
 
+def test_ini_request_embeds_a_ca_issued_certificate_from_the_provider(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    ca_key, ca_certificate = make_ca()
+    provider = MappingCertificateProvider(
+        {
+            CertificateUsage.SIGNATURE: issue_certificate(
+                ca_key, ca_certificate, keyring.signature.public_key(), CertificateUsage.SIGNATURE
+            )
+        }
+    )
+    order_data = _order_data(h005.build_ini_request(bank, user, keyring, provider))
+    certificate_base64 = order_data.findtext(f".//{{{_DS}}}X509Certificate")
+    assert certificate_base64 is not None
+    certificate = x509.load_der_x509_certificate(base64.b64decode(certificate_base64))
+    # The transmitted certificate is the CA-issued one, not a self-signed cert.
+    assert certificate.issuer == ca_certificate.subject
+
+
+def test_parse_hpb_response_verifies_bank_certificates_against_a_trust_anchor(
+    keyring: Keyring,
+) -> None:
+    bank_keyring = keys.generate_keyring()
+    ca_key, ca_certificate = make_ca("Bank CA")
+    certificates = {
+        CertificateUsage.AUTHENTICATION: issue_certificate(
+            ca_key, ca_certificate, bank_keyring.authentication.public_key(),
+            CertificateUsage.AUTHENTICATION,
+        ),
+        CertificateUsage.ENCRYPTION: issue_certificate(
+            ca_key, ca_certificate, bank_keyring.encryption.public_key(),
+            CertificateUsage.ENCRYPTION,
+        ),
+    }
+    response = make_hpb_response(keyring, bank_keyring, certificates=certificates)
+    verifier = TrustAnchorVerifier([ca_certificate])
+    authentication, encryption = h005.parse_hpb_response(response, keyring, verifier)
+    assert authentication.public_numbers() == (
+        bank_keyring.authentication.public_key().public_numbers()
+    )
+    assert encryption.public_numbers() == bank_keyring.encryption.public_key().public_numbers()
+
+
+def test_parse_hpb_response_rejects_bank_certificates_from_an_untrusted_anchor(
+    keyring: Keyring,
+) -> None:
+    bank_keyring = keys.generate_keyring()
+    ca_key, ca_certificate = make_ca("Bank CA")
+    _, untrusted = make_ca("Untrusted CA")
+    certificates = {
+        CertificateUsage.AUTHENTICATION: issue_certificate(
+            ca_key, ca_certificate, bank_keyring.authentication.public_key(),
+            CertificateUsage.AUTHENTICATION,
+        ),
+        CertificateUsage.ENCRYPTION: issue_certificate(
+            ca_key, ca_certificate, bank_keyring.encryption.public_key(),
+            CertificateUsage.ENCRYPTION,
+        ),
+    }
+    response = make_hpb_response(keyring, bank_keyring, certificates=certificates)
+    with pytest.raises(BankCertificateError):
+        h005.parse_hpb_response(response, keyring, TrustAnchorVerifier([untrusted]))
+
+
+def test_parse_hpb_response_verifier_rejects_a_self_signed_bank_certificate(
+    keyring: Keyring,
+) -> None:
+    # A "mit Schlüsseln" bank sends self-signed certs; a trust-anchor verifier rejects them
+    # because they do not chain to the caller's anchor.
+    bank_keyring = keys.generate_keyring()
+    response = make_hpb_response(keyring, bank_keyring)
+    _, ca_certificate = make_ca()
+    with pytest.raises(BankCertificateError):
+        h005.parse_hpb_response(response, keyring, TrustAnchorVerifier([ca_certificate]))
+
+
 def test_public_key_from_info_falls_back_to_rsa_key_value(keyring: Keyring) -> None:
     # A bank that sends a legacy RSAKeyValue instead of an X.509 certificate is still read.
     numbers = keyring.authentication.public_key().public_numbers()
@@ -161,7 +239,9 @@ def test_public_key_from_info_falls_back_to_rsa_key_value(keyring: Keyring) -> N
     )
     etree.SubElement(rsa_key_value, f"{{{_DS}}}Modulus").text = _b64_int(numbers.n)
     etree.SubElement(rsa_key_value, f"{{{_DS}}}Exponent").text = _b64_int(numbers.e)
-    recovered = h005._public_key_from_info(root, "AuthenticationPubKeyInfo")
+    recovered = h005._public_key_from_info(
+        root, "AuthenticationPubKeyInfo", keys.CertificateUsage.AUTHENTICATION, None
+    )
     assert recovered.public_numbers() == numbers
 
 
