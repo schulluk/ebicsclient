@@ -10,7 +10,9 @@ import logging
 
 from ebicsclient import crypto, letter
 from ebicsclient.errors import ClientStateError, ReturnCodeError
+from ebicsclient.formats import camt053
 from ebicsclient.models import (
+    CAMT_053,
     Bank,
     BankKeys,
     BusinessTransactionFormat,
@@ -18,6 +20,7 @@ from ebicsclient.models import (
     Keyring,
     Letter,
     OutputFormat,
+    Statement,
     User,
 )
 from ebicsclient.protocol import h005
@@ -230,3 +233,23 @@ class Client:
         return crypto.decrypt_order_data(
             self._keyring.encryption, initialisation.transaction_key, encrypted_order_data
         )
+
+    def download_statements(self) -> list[Statement]:
+        """Download the end-of-period camt.053 statements and parse them.
+
+        A convenience over :meth:`download` for the common case: it fetches
+        ``EOP/camt.053`` and returns the parsed statements (account, balances, entries).
+        The bank's keys must already be available (call :meth:`hpb` first).
+
+        Returns:
+            The account statements the bank delivered, in document order.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
+            CryptoError: the order data could not be decrypted.
+            MessageFormatError: the downloaded camt.053 data could not be parsed.
+        """
+        return camt053.parse(self.download(CAMT_053))

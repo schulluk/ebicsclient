@@ -98,6 +98,16 @@ class ClientStateError(EbicsError):
     """
 
 
+class MessageFormatError(EbicsError):
+    """A downloaded business message could not be parsed.
+
+    Raised when order data the bank returned — a camt.053 statement, for instance — is not
+    the well-formed, expected shape (missing mandatory elements, a malformed amount, an
+    unreadable container). Distinct from :class:`ProtocolError`, which concerns the EBICS
+    envelope rather than the payload it carries.
+    """
+
+
 class TransportError(EbicsError):
     """The HTTP exchange with the bank failed (connection, TLS, status code)."""
 

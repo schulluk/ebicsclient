@@ -4,7 +4,9 @@ Plain data holders kept free of behaviour; the logic that operates on them lives
 the feature modules (e.g. ``keys.py`` for keyring generation and persistence).
 """
 
+import datetime
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import StrEnum
 
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -162,6 +164,88 @@ class DownloadSegment:
     segment_number: int
     last_segment: bool
     order_data_segment: str
+
+
+class CreditDebit(StrEnum):
+    """Whether an amount is a credit or a debit (ISO 20022 ``CreditDebitCode``).
+
+    - ``CREDIT``: money into the account (ISO code ``CRDT``).
+    - ``DEBIT``: money out of the account (ISO code ``DBIT``).
+    """
+
+    CREDIT = "CRDT"
+    DEBIT = "DBIT"
+
+
+#: ISO external balance-type code for the closing booked balance — the definitive
+#: end-of-period balance carried in a camt.053 statement.
+BALANCE_CLOSING_BOOKED = "CLBD"
+#: ISO external balance-type code for the opening booked balance.
+BALANCE_OPENING_BOOKED = "OPBD"
+
+
+@dataclass(frozen=True, slots=True)
+class Balance:
+    """One balance reported in an account statement.
+
+    Attributes:
+        code: The ISO external balance-type code (an open code list), e.g. ``"CLBD"``
+            (closing booked) or ``"OPBD"`` (opening booked). See ``BALANCE_*`` constants.
+        amount: The balance amount, as an exact decimal (never a float).
+        currency: The ISO 4217 currency code of ``amount`` (e.g. ``"CHF"``).
+        credit_debit: Whether the balance is a credit or a debit position.
+        date: The date the balance refers to.
+    """
+
+    code: str
+    amount: Decimal
+    currency: str
+    credit_debit: CreditDebit
+    date: datetime.date
+
+
+@dataclass(frozen=True, slots=True)
+class Entry:
+    """One booking entry in an account statement.
+
+    Attributes:
+        amount: The entry amount, as an exact decimal (never a float).
+        currency: The ISO 4217 currency code of ``amount``.
+        credit_debit: Whether the entry credits or debits the account.
+        status: The ISO entry status (e.g. ``"BOOK"`` booked, ``"PDNG"`` pending).
+        booking_date: The booking date, or ``None`` if the statement omitted it.
+        value_date: The value date, or ``None`` if the statement omitted it.
+        reference: The account-servicer reference, or ``None`` if absent.
+    """
+
+    amount: Decimal
+    currency: str
+    credit_debit: CreditDebit
+    status: str
+    booking_date: datetime.date | None
+    value_date: datetime.date | None
+    reference: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class Statement:
+    """A single account statement parsed from a camt.053 document.
+
+    Attributes:
+        identification: The statement identification assigned by the bank.
+        iban: The account IBAN, or ``None`` if the statement carried another account id.
+        opening_balance: The opening booked balance (``OPBD``), or ``None`` if not reported.
+        closing_balance: The closing booked balance (``CLBD``), or ``None`` if not reported.
+        balances: Every balance the statement reported, in document order.
+        entries: Every booking entry the statement reported, in document order.
+    """
+
+    identification: str
+    iban: str | None
+    opening_balance: Balance | None
+    closing_balance: Balance | None
+    balances: tuple[Balance, ...]
+    entries: tuple[Entry, ...]
 
 
 class OutputFormat(StrEnum):

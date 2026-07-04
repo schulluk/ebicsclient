@@ -1,5 +1,9 @@
 """Tests for ebicsclient.client: INI/HIA orchestration with a fake transport."""
 
+import io
+import zipfile
+from decimal import Decimal
+
 import pytest
 from lxml import etree
 
@@ -168,6 +172,27 @@ def test_download_reassembles_multiple_segments(keyring: Keyring) -> None:
         etree.fromstring(post).findtext(f".//{{{_NS}}}TransactionPhase") for post in transport.posts
     ]
     assert phases == ["Initialisation", "Transfer", "Transfer", "Receipt"]
+
+
+def test_download_statements_parses_a_camt053_zip(keyring: Keyring) -> None:
+    document = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.08"><BkToCstmrStmt>'
+        b"<Stmt><Id>STMT-1</Id>"
+        b"<Acct><Id><IBAN>CH9300762011623852957</IBAN></Id></Acct>"
+        b"<Bal><Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp>"
+        b'<Amt Ccy="CHF">42.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><Dt>2026-06-30</Dt></Dt></Bal>'
+        b"</Stmt></BkToCstmrStmt></Document>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("statement.xml", document)
+    responses = make_download_responses(keyring, buffer.getvalue(), num_segments=1)
+    client, _ = _download_client(responses, keyring, _bank_keys(keys.generate_keyring()))
+    (statement,) = client.download_statements()
+    assert statement.identification == "STMT-1"
+    assert statement.closing_balance is not None
+    assert statement.closing_balance.amount == Decimal("42.00")
 
 
 def test_download_raises_when_the_bank_reports_an_error(keyring: Keyring) -> None:
