@@ -112,6 +112,8 @@ class BusinessTransactionFormat:
 
 
 #: The Swiss camt.053.001.08 account-statement download (end-of-period, ZIP container).
+#: Matches the ZKB ``Z53`` order type verbatim (``EOP / CH / camt.053 / 08 / ZIP``); see
+#: docs/10-btf-order-types.md, which transcribes ZKB's published order-type/BTF catalogue.
 CAMT_053 = BusinessTransactionFormat(
     service_name="EOP",
     message_name="camt.053",
