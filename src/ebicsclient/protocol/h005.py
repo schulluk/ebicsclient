@@ -24,7 +24,15 @@ from lxml import etree
 
 from ebicsclient import crypto, keys
 from ebicsclient.errors import ProtocolError, ReturnCodeError
-from ebicsclient.models import Bank, Keyring, User
+from ebicsclient.models import (
+    Bank,
+    BankKeys,
+    BusinessTransactionFormat,
+    DownloadInitialisation,
+    DownloadSegment,
+    Keyring,
+    User,
+)
 
 NAMESPACE = "urn:org:ebics:H005"
 # EBICS signature keys (A006) are defined in their own S002 namespace, so the INI order
@@ -37,9 +45,15 @@ _S002_NSMAP = cast("dict[str, str]", {None: S002_NAMESPACE, "ds": _DS})
 _PROTOCOL_VERSION = "H005"
 _REVISION = "1"
 _ADMIN_ORDER_TYPE_HPB = "HPB"  # H005 administrative order type for the bank-key download
+_ADMIN_ORDER_TYPE_BTD = "BTD"  # H005 business transaction download
 _SECURITY_MEDIUM = "0000"
 _OK_RETURN_CODE = "000000"
 _NONCE_BYTES = 16  # 128-bit nonce, rendered as uppercase hex
+_SHA256_ALGORITHM = "http://www.w3.org/2001/04/xmlenc#sha256"
+_PHASE_INITIALISATION = "Initialisation"
+_PHASE_TRANSFER = "Transfer"
+_PHASE_RECEIPT = "Receipt"
+_RECEIPT_POSITIVE = "0"  # ReceiptCode acknowledging a successful download
 
 # EBICS algorithm-version labels for the three keys.
 _SIGNATURE_VERSION = "A006"
@@ -156,6 +170,207 @@ def parse_hpb_response(
     )
 
 
+def parse_download_initialisation_response(response: bytes) -> DownloadInitialisation:
+    """Parse a download-initialisation response into its transaction handle and first segment.
+
+    Args:
+        response: The raw ``ebicsResponse`` bytes from the bank.
+
+    Returns:
+        The transaction ID, segment count, encrypted transaction key, and first order-data
+        segment needed to fetch and decrypt the download.
+
+    Raises:
+        ProtocolError: the response could not be parsed or is missing required elements.
+        ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
+    """
+    root = _parse(response)
+    _check_return_code(root)
+    static = _child(_child(root, "header"), "static")
+    mutable = _child(_child(root, "header"), "mutable")
+    data_transfer = _child(_child(root, "body"), "DataTransfer")
+    encryption_info = _child(data_transfer, "DataEncryptionInfo")
+    segment_number, last_segment = _segment(mutable)
+    return DownloadInitialisation(
+        transaction_id=_child_text(static, "TransactionID"),
+        num_segments=_int(_child_text(static, "NumSegments"), "NumSegments"),
+        transaction_key=base64.b64decode(_child_text(encryption_info, "TransactionKey")),
+        segment_number=segment_number,
+        last_segment=last_segment,
+        order_data_segment=_child_text(data_transfer, "OrderData"),
+    )
+
+
+def parse_download_segment_response(response: bytes) -> DownloadSegment:
+    """Parse a download-transfer response into one further order-data segment.
+
+    Args:
+        response: The raw ``ebicsResponse`` bytes from the bank.
+
+    Returns:
+        The segment number, whether it is the last segment, and its order-data segment.
+
+    Raises:
+        ProtocolError: the response could not be parsed or is missing required elements.
+        ReturnCodeError: the bank reported a non-OK return code.
+    """
+    root = _parse(response)
+    _check_return_code(root)
+    mutable = _child(_child(root, "header"), "mutable")
+    data_transfer = _child(_child(root, "body"), "DataTransfer")
+    segment_number, last_segment = _segment(mutable)
+    return DownloadSegment(
+        segment_number=segment_number,
+        last_segment=last_segment,
+        order_data_segment=_child_text(data_transfer, "OrderData"),
+    )
+
+
+def build_download_initialisation_request(
+    bank: Bank,
+    user: User,
+    keyring: Keyring,
+    bank_keys: BankKeys,
+    btf: BusinessTransactionFormat,
+) -> bytes:
+    """Build the signed download-initialisation request (BTD, phase Initialisation).
+
+    Opens a download transaction for a Business Transaction Format: the request carries the
+    BTF, the digests of the bank's expected keys, and an ``AuthSignature`` signed with the
+    X002 key. The bank replies with a transaction ID, the segment count, and the first
+    (encrypted) order-data segment.
+
+    Args:
+        bank: The target bank.
+        user: The subscriber.
+        keyring: The subscriber's key pairs (the X002 key signs the request).
+        bank_keys: The bank's public keys (from HPB), digested into the request.
+        btf: The Business Transaction Format to download (e.g. ``CAMT_053``).
+
+    Returns:
+        The serialised, signed ``ebicsRequest`` XML.
+    """
+    root = etree.Element(etree.QName(NAMESPACE, "ebicsRequest"), nsmap=_NSMAP)
+    root.set("Version", _PROTOCOL_VERSION)
+    root.set("Revision", _REVISION)
+
+    header = etree.SubElement(root, etree.QName(NAMESPACE, "header"))
+    header.set("authenticate", "true")
+    static = etree.SubElement(header, etree.QName(NAMESPACE, "static"))
+    _text(static, "HostID", bank.host_id)
+    _text(static, "Nonce", _nonce())
+    _text(static, "Timestamp", _timestamp())
+    _text(static, "PartnerID", user.partner_id)
+    _text(static, "UserID", user.user_id)
+    order_details = etree.SubElement(static, etree.QName(NAMESPACE, "OrderDetails"))
+    _text(order_details, "AdminOrderType", _ADMIN_ORDER_TYPE_BTD)
+    _append_btd_order_params(order_details, btf)
+    _append_bank_pub_key_digests(static, bank_keys)
+    _text(static, "SecurityMedium", _SECURITY_MEDIUM)
+
+    mutable = etree.SubElement(header, etree.QName(NAMESPACE, "mutable"))
+    _text(mutable, "TransactionPhase", _PHASE_INITIALISATION)
+
+    root.append(crypto.build_auth_signature(root, keyring.authentication, NAMESPACE))
+    etree.SubElement(root, etree.QName(NAMESPACE, "body"))
+    return _serialize(root)
+
+
+def _append_btd_order_params(order_details: etree._Element, btf: BusinessTransactionFormat) -> None:
+    params = etree.SubElement(order_details, etree.QName(NAMESPACE, "BTDOrderParams"))
+    service = etree.SubElement(params, etree.QName(NAMESPACE, "Service"))
+    # RestrictedServiceType order: ServiceName, Scope?, ServiceOption?, Container?, MsgName.
+    _text(service, "ServiceName", btf.service_name)
+    if btf.scope is not None:
+        _text(service, "Scope", btf.scope)
+    if btf.service_option is not None:
+        _text(service, "ServiceOption", btf.service_option)
+    if btf.container is not None:
+        container = etree.SubElement(service, etree.QName(NAMESPACE, "Container"))
+        container.set("containerType", btf.container)
+    message = _text(service, "MsgName", btf.message_name)
+    if btf.message_version is not None:
+        message.set("version", btf.message_version)
+
+
+def _append_bank_pub_key_digests(static: etree._Element, bank_keys: BankKeys) -> None:
+    digests = etree.SubElement(static, etree.QName(NAMESPACE, "BankPubKeyDigests"))
+    authentication = _text(
+        digests,
+        "Authentication",
+        base64.b64encode(keys.public_key_hash(bank_keys.authentication)).decode("ascii"),
+    )
+    authentication.set("Version", _AUTHENTICATION_VERSION)
+    authentication.set("Algorithm", _SHA256_ALGORITHM)
+    encryption = _text(
+        digests,
+        "Encryption",
+        base64.b64encode(keys.public_key_hash(bank_keys.encryption)).decode("ascii"),
+    )
+    encryption.set("Version", _ENCRYPTION_VERSION)
+    encryption.set("Algorithm", _SHA256_ALGORITHM)
+
+
+def build_download_transfer_request(
+    bank: Bank, keyring: Keyring, transaction_id: str, segment_number: int, *, last_segment: bool
+) -> bytes:
+    """Build the signed request that fetches one further download segment (phase Transfer).
+
+    Args:
+        bank: The target bank.
+        keyring: The subscriber's key pairs (the X002 key signs the request).
+        transaction_id: The transaction ID the bank issued during initialisation.
+        segment_number: The 1-based number of the segment being requested.
+        last_segment: Whether this is the final segment of the transfer.
+
+    Returns:
+        The serialised, signed ``ebicsRequest`` XML.
+    """
+    root, mutable = _transaction_request(bank, transaction_id)
+    _text(mutable, "TransactionPhase", _PHASE_TRANSFER)
+    segment = _text(mutable, "SegmentNumber", str(segment_number))
+    segment.set("lastSegment", "true" if last_segment else "false")
+    root.append(crypto.build_auth_signature(root, keyring.authentication, NAMESPACE))
+    etree.SubElement(root, etree.QName(NAMESPACE, "body"))
+    return _serialize(root)
+
+
+def build_download_receipt_request(bank: Bank, keyring: Keyring, transaction_id: str) -> bytes:
+    """Build the signed request acknowledging a completed download (phase Receipt).
+
+    Args:
+        bank: The target bank.
+        keyring: The subscriber's key pairs (the X002 key signs the request).
+        transaction_id: The transaction ID the bank issued during initialisation.
+
+    Returns:
+        The serialised, signed ``ebicsRequest`` XML.
+    """
+    root, mutable = _transaction_request(bank, transaction_id)
+    _text(mutable, "TransactionPhase", _PHASE_RECEIPT)
+    body = etree.SubElement(root, etree.QName(NAMESPACE, "body"))
+    receipt = etree.SubElement(body, etree.QName(NAMESPACE, "TransferReceipt"))
+    receipt.set("authenticate", "true")
+    _text(receipt, "ReceiptCode", _RECEIPT_POSITIVE)
+    # The TransferReceipt is authenticated too, so sign after building it, then place the
+    # AuthSignature in schema order (header, AuthSignature, body).
+    root.insert(1, crypto.build_auth_signature(root, keyring.authentication, NAMESPACE))
+    return _serialize(root)
+
+
+def _transaction_request(bank: Bank, transaction_id: str) -> tuple[etree._Element, etree._Element]:
+    root = etree.Element(etree.QName(NAMESPACE, "ebicsRequest"), nsmap=_NSMAP)
+    root.set("Version", _PROTOCOL_VERSION)
+    root.set("Revision", _REVISION)
+    header = etree.SubElement(root, etree.QName(NAMESPACE, "header"))
+    header.set("authenticate", "true")
+    static = etree.SubElement(header, etree.QName(NAMESPACE, "static"))
+    _text(static, "HostID", bank.host_id)
+    _text(static, "TransactionID", transaction_id)
+    mutable = etree.SubElement(header, etree.QName(NAMESPACE, "mutable"))
+    return root, mutable
+
+
 def raise_for_return_code(response: bytes) -> None:
     """Raise if a key-management response carries a non-OK EBICS return code.
 
@@ -181,6 +396,40 @@ def _check_return_code(root: etree._Element) -> None:
             parent = return_code.getparent()
             report = parent.find(f"{{{NAMESPACE}}}ReportText") if parent is not None else None
             raise ReturnCodeError(return_code.text, report.text if report is not None else None)
+
+
+def _child(parent: etree._Element, local_name: str) -> etree._Element:
+    # Direct-child lookup (not descendant), so nested elements sharing a name — the header
+    # and body each carry a <ReturnCode>, for instance — are never confused.
+    child = parent.find(f"{{{NAMESPACE}}}{local_name}")
+    if child is None:
+        raise ProtocolError(f"EBICS response is missing <{local_name}>")
+    return child
+
+
+def _child_text(parent: etree._Element, local_name: str) -> str:
+    child = _child(parent, local_name)
+    if child.text is None:
+        raise ProtocolError(f"EBICS response has an empty <{local_name}>")
+    return child.text
+
+
+def _segment(mutable: etree._Element) -> tuple[int, bool]:
+    segment = _child(mutable, "SegmentNumber")
+    if segment.text is None:
+        raise ProtocolError("EBICS response has an empty <SegmentNumber>")
+    last_segment = segment.get("lastSegment")
+    if last_segment is None:
+        raise ProtocolError("EBICS response <SegmentNumber> is missing the lastSegment attribute")
+    # XSD boolean: "true"/"false" or "1"/"0".
+    return _int(segment.text, "SegmentNumber"), last_segment in ("true", "1")
+
+
+def _int(text: str, local_name: str) -> int:
+    try:
+        return int(text)
+    except ValueError as error:
+        raise ProtocolError(f"EBICS response <{local_name}> is not an integer: {text!r}") from error
 
 
 def _required_text(root: etree._Element, local_name: str) -> str:

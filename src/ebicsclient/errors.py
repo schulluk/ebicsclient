@@ -90,6 +90,14 @@ class KeyringDecryptionError(KeyringError):
     retryability = Retryability.CORRECTABLE
 
 
+class ClientStateError(EbicsError):
+    """An operation was called before a prerequisite step had run.
+
+    Raised when the client is used out of order — for example, downloading before the
+    bank's keys have been fetched with HPB. Run the prerequisite step and retry.
+    """
+
+
 class TransportError(EbicsError):
     """The HTTP exchange with the bank failed (connection, TLS, status code)."""
 

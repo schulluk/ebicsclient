@@ -167,3 +167,134 @@ def test_public_key_from_info_falls_back_to_rsa_key_value(keyring: Keyring) -> N
 
 def _b64_int(value: int) -> str:
     return base64.b64encode(value.to_bytes((value.bit_length() + 7) // 8, "big")).decode("ascii")
+
+
+def _download_response(
+    *,
+    phase: str,
+    segment_number: int,
+    last_segment: bool,
+    order_data: str,
+    transaction_id: str | None = None,
+    num_segments: int | None = None,
+    transaction_key: str | None = None,
+) -> bytes:
+    root = etree.Element(f"{{{_NS}}}ebicsResponse", nsmap={None: _NS})
+    root.set("Version", "H005")
+    root.set("Revision", "1")
+    header = etree.SubElement(root, f"{{{_NS}}}header")
+    header.set("authenticate", "true")
+    static = etree.SubElement(header, f"{{{_NS}}}static")
+    if transaction_id is not None:
+        etree.SubElement(static, f"{{{_NS}}}TransactionID").text = transaction_id
+    if num_segments is not None:
+        etree.SubElement(static, f"{{{_NS}}}NumSegments").text = str(num_segments)
+    mutable = etree.SubElement(header, f"{{{_NS}}}mutable")
+    etree.SubElement(mutable, f"{{{_NS}}}TransactionPhase").text = phase
+    segment = etree.SubElement(mutable, f"{{{_NS}}}SegmentNumber")
+    segment.text = str(segment_number)
+    segment.set("lastSegment", "true" if last_segment else "false")
+    etree.SubElement(mutable, f"{{{_NS}}}ReturnCode").text = "000000"
+    etree.SubElement(mutable, f"{{{_NS}}}ReportText").text = "[EBICS_OK] OK"
+    body = etree.SubElement(root, f"{{{_NS}}}body")
+    data_transfer = etree.SubElement(body, f"{{{_NS}}}DataTransfer")
+    if transaction_key is not None:
+        info = etree.SubElement(data_transfer, f"{{{_NS}}}DataEncryptionInfo")
+        digest = etree.SubElement(info, f"{{{_NS}}}EncryptionPubKeyDigest")
+        digest.set("Version", "E002")
+        digest.text = base64.b64encode(b"digest").decode("ascii")
+        etree.SubElement(info, f"{{{_NS}}}TransactionKey").text = transaction_key
+    etree.SubElement(data_transfer, f"{{{_NS}}}OrderData").text = order_data
+    etree.SubElement(body, f"{{{_NS}}}ReturnCode").text = "000000"
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
+
+
+def test_parse_download_initialisation_response_extracts_the_transaction() -> None:
+    transaction_key = base64.b64encode(b"encrypted-key").decode("ascii")
+    response = _download_response(
+        phase="Initialisation",
+        segment_number=1,
+        last_segment=False,
+        order_data="c2VnbWVudC1vbmU=",
+        transaction_id="A" * 32,
+        num_segments=3,
+        transaction_key=transaction_key,
+    )
+    result = h005.parse_download_initialisation_response(response)
+    assert result.transaction_id == "A" * 32
+    assert result.num_segments == 3
+    assert result.transaction_key == b"encrypted-key"
+    assert result.segment_number == 1
+    assert result.last_segment is False
+    assert result.order_data_segment == "c2VnbWVudC1vbmU="
+
+
+def test_parse_download_initialisation_response_marks_a_single_segment_as_last() -> None:
+    response = _download_response(
+        phase="Initialisation",
+        segment_number=1,
+        last_segment=True,
+        order_data="b25seQ==",
+        transaction_id="B" * 32,
+        num_segments=1,
+        transaction_key=base64.b64encode(b"k").decode("ascii"),
+    )
+    result = h005.parse_download_initialisation_response(response)
+    assert result.num_segments == 1
+    assert result.last_segment is True
+
+
+def test_parse_download_initialisation_response_raises_on_a_non_ok_return_code() -> None:
+    with pytest.raises(ReturnCodeError):
+        h005.parse_download_initialisation_response(_ERROR_RESPONSE)
+
+
+def test_parse_download_initialisation_response_rejects_a_missing_transaction_key() -> None:
+    response = _download_response(
+        phase="Initialisation",
+        segment_number=1,
+        last_segment=True,
+        order_data="b25seQ==",
+        transaction_id="C" * 32,
+        num_segments=1,
+    )
+    with pytest.raises(ProtocolError):
+        h005.parse_download_initialisation_response(response)
+
+
+def test_parse_download_segment_response_extracts_the_segment() -> None:
+    response = _download_response(
+        phase="Transfer",
+        segment_number=2,
+        last_segment=True,
+        order_data="c2Vjb25k",
+    )
+    result = h005.parse_download_segment_response(response)
+    assert result.segment_number == 2
+    assert result.last_segment is True
+    assert result.order_data_segment == "c2Vjb25k"
+
+
+def test_parse_download_segment_response_reads_a_non_final_segment() -> None:
+    response = _download_response(
+        phase="Transfer",
+        segment_number=2,
+        last_segment=False,
+        order_data="bWlkZGxl",
+    )
+    result = h005.parse_download_segment_response(response)
+    assert result.segment_number == 2
+    assert result.last_segment is False
+
+
+def test_parse_download_response_rejects_a_segment_number_without_last_segment_flag() -> None:
+    root = etree.Element(f"{{{_NS}}}ebicsResponse", nsmap={None: _NS})
+    header = etree.SubElement(root, f"{{{_NS}}}header")
+    etree.SubElement(header, f"{{{_NS}}}static")
+    mutable = etree.SubElement(header, f"{{{_NS}}}mutable")
+    etree.SubElement(mutable, f"{{{_NS}}}SegmentNumber").text = "1"
+    etree.SubElement(mutable, f"{{{_NS}}}ReturnCode").text = "000000"
+    body = etree.SubElement(root, f"{{{_NS}}}body")
+    etree.SubElement(body, f"{{{_NS}}}ReturnCode").text = "000000"
+    with pytest.raises(ProtocolError):
+        h005.parse_download_segment_response(etree.tostring(root))

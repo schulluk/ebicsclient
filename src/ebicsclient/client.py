@@ -5,13 +5,15 @@ caller performs: the key-initialisation handshake (INI, HIA) and — once activa
 fetching the bank's keys (HPB) and downloading statements.
 """
 
+import base64
 import logging
 
-from ebicsclient import letter
-from ebicsclient.errors import ReturnCodeError
+from ebicsclient import crypto, letter
+from ebicsclient.errors import ClientStateError, ReturnCodeError
 from ebicsclient.models import (
     Bank,
     BankKeys,
+    BusinessTransactionFormat,
     InitializationState,
     Keyring,
     Letter,
@@ -166,3 +168,65 @@ class Client:
         )
         self._bank_keys = BankKeys(authentication=authentication, encryption=encryption)
         return self._bank_keys
+
+    def download(self, btf: BusinessTransactionFormat) -> bytes:
+        """Download order data for a Business Transaction Format and return the plaintext.
+
+        Runs the full download transaction: it opens the transaction (initialisation),
+        fetches every further segment (transfer), acknowledges the transfer (receipt), then
+        reassembles, decrypts, and inflates the order data. The bank's keys must already be
+        available (call :meth:`hpb` first).
+
+        Args:
+            btf: The Business Transaction Format to download (e.g. ``CAMT_053``).
+
+        Returns:
+            The decrypted, decompressed order-data bytes. For a container format this is the
+            container itself — e.g. ``CAMT_053`` yields a ZIP of camt.053 documents.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
+            CryptoError: the order data could not be decrypted.
+        """
+        if self._bank_keys is None:
+            raise ClientStateError("Download requires the bank's keys; call hpb() first")
+        logger.info("Download: opening a %s/%s transaction", btf.service_name, btf.message_name)
+        request = h005.build_download_initialisation_request(
+            self._bank, self._user, self._keyring, self._bank_keys, btf
+        )
+        initialisation = h005.parse_download_initialisation_response(self._transport.post(request))
+
+        # Order data is one base64 stream split into NumSegments pieces: fetch the rest, in
+        # order, driven by the authoritative segment count from the initialisation response.
+        segments = [initialisation.order_data_segment]
+        for number in range(2, initialisation.num_segments + 1):
+            transfer = h005.build_download_transfer_request(
+                self._bank,
+                self._keyring,
+                initialisation.transaction_id,
+                number,
+                last_segment=number == initialisation.num_segments,
+            )
+            segment = h005.parse_download_segment_response(self._transport.post(transfer))
+            segments.append(segment.order_data_segment)
+
+        # Acknowledge the completed transfer so the bank marks the download as delivered.
+        receipt = h005.build_download_receipt_request(
+            self._bank, self._keyring, initialisation.transaction_id
+        )
+        h005.raise_for_return_code(self._transport.post(receipt))
+        logger.info(
+            "Download: received %d segment(s) for transaction %s",
+            initialisation.num_segments,
+            initialisation.transaction_id,
+        )
+
+        # The segments are pieces of a single base64 stream, so join before decoding — a
+        # segment boundary need not fall on a 4-character base64 group.
+        encrypted_order_data = base64.b64decode("".join(segments))
+        return crypto.decrypt_order_data(
+            self._keyring.encryption, initialisation.transaction_key, encrypted_order_data
+        )

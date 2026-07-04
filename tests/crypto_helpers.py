@@ -42,6 +42,113 @@ def encrypt_order_data(
     return transaction_key, encrypted
 
 
+def make_download_responses(
+    subscriber_keyring: Keyring,
+    order_data: bytes,
+    *,
+    num_segments: int = 1,
+    transaction_id: str = "A" * 32,
+) -> list[bytes]:
+    """Build the response sequence for a full download of ``order_data``.
+
+    Encrypts ``order_data`` the way a bank would, splits the base64 stream into
+    ``num_segments`` pieces, and returns ``[initialisation, transfer..., receipt]`` — the
+    responses a fake transport should hand back in order to exercise ``Client.download``.
+    """
+    transaction_key, encrypted = encrypt_order_data(
+        subscriber_keyring.encryption.public_key(), order_data
+    )
+    stream = base64.b64encode(encrypted).decode("ascii")
+    pieces = _split(stream, num_segments)
+    encoded_key = base64.b64encode(transaction_key).decode("ascii")
+
+    responses = [
+        _download_response(
+            phase="Initialisation",
+            segment_number=1,
+            last_segment=num_segments == 1,
+            order_data=pieces[0],
+            transaction_id=transaction_id,
+            num_segments=num_segments,
+            transaction_key=encoded_key,
+        )
+    ]
+    for index in range(1, num_segments):
+        responses.append(
+            _download_response(
+                phase="Transfer",
+                segment_number=index + 1,
+                last_segment=index + 1 == num_segments,
+                order_data=pieces[index],
+            )
+        )
+    responses.append(_receipt_response())
+    return responses
+
+
+def _split(stream: str, parts: int) -> list[str]:
+    size = -(-len(stream) // parts)  # ceil division, so every piece but the last is full
+    return [stream[index : index + size] for index in range(0, len(stream), size)] or [""]
+
+
+def _download_response(
+    *,
+    phase: str,
+    segment_number: int,
+    last_segment: bool,
+    order_data: str,
+    transaction_id: str | None = None,
+    num_segments: int | None = None,
+    transaction_key: str | None = None,
+) -> bytes:
+    namespace = h005.NAMESPACE
+    root = etree.Element(etree.QName(namespace, "ebicsResponse"), nsmap={None: namespace})
+    root.set("Version", "H005")
+    root.set("Revision", "1")
+    header = etree.SubElement(root, etree.QName(namespace, "header"))
+    header.set("authenticate", "true")
+    static = etree.SubElement(header, etree.QName(namespace, "static"))
+    if transaction_id is not None:
+        etree.SubElement(static, etree.QName(namespace, "TransactionID")).text = transaction_id
+    if num_segments is not None:
+        etree.SubElement(static, etree.QName(namespace, "NumSegments")).text = str(num_segments)
+    mutable = etree.SubElement(header, etree.QName(namespace, "mutable"))
+    etree.SubElement(mutable, etree.QName(namespace, "TransactionPhase")).text = phase
+    segment = etree.SubElement(mutable, etree.QName(namespace, "SegmentNumber"))
+    segment.text = str(segment_number)
+    segment.set("lastSegment", "true" if last_segment else "false")
+    etree.SubElement(mutable, etree.QName(namespace, "ReturnCode")).text = "000000"
+    etree.SubElement(mutable, etree.QName(namespace, "ReportText")).text = "[EBICS_OK] OK"
+    body = etree.SubElement(root, etree.QName(namespace, "body"))
+    data_transfer = etree.SubElement(body, etree.QName(namespace, "DataTransfer"))
+    if transaction_key is not None:
+        info = etree.SubElement(data_transfer, etree.QName(namespace, "DataEncryptionInfo"))
+        digest = etree.SubElement(info, etree.QName(namespace, "EncryptionPubKeyDigest"))
+        digest.set("Version", "E002")
+        digest.text = base64.b64encode(b"digest").decode("ascii")
+        etree.SubElement(info, etree.QName(namespace, "TransactionKey")).text = transaction_key
+    etree.SubElement(data_transfer, etree.QName(namespace, "OrderData")).text = order_data
+    etree.SubElement(body, etree.QName(namespace, "ReturnCode")).text = "000000"
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
+
+
+def _receipt_response() -> bytes:
+    namespace = h005.NAMESPACE
+    root = etree.Element(etree.QName(namespace, "ebicsResponse"), nsmap={None: namespace})
+    root.set("Version", "H005")
+    root.set("Revision", "1")
+    header = etree.SubElement(root, etree.QName(namespace, "header"))
+    header.set("authenticate", "true")
+    etree.SubElement(header, etree.QName(namespace, "static"))
+    mutable = etree.SubElement(header, etree.QName(namespace, "mutable"))
+    etree.SubElement(mutable, etree.QName(namespace, "TransactionPhase")).text = "Receipt"
+    etree.SubElement(mutable, etree.QName(namespace, "ReturnCode")).text = "000000"
+    etree.SubElement(mutable, etree.QName(namespace, "ReportText")).text = "[EBICS_OK] OK"
+    body = etree.SubElement(root, etree.QName(namespace, "body"))
+    etree.SubElement(body, etree.QName(namespace, "ReturnCode")).text = "000000"
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
+
+
 def make_hpb_response(
     subscriber_keyring: Keyring, bank_keyring: Keyring, *, host_id: str = "ZKBKCHZZ"
 ) -> bytes:

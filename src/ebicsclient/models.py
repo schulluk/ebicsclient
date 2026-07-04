@@ -85,6 +85,85 @@ class InitializationState(StrEnum):
     ALREADY_INITIALISED = "already_initialised"
 
 
+@dataclass(frozen=True, slots=True)
+class BusinessTransactionFormat:
+    """An EBICS 3.0 Business Transaction Format (BTF) — what to download or upload.
+
+    In H005 the BTF replaces the old order type: it names the service and message via the
+    parameters below (e.g. Swiss camt.053 statements are ``EOP / CH / ZIP / camt.053 / 08``).
+
+    Attributes:
+        service_name: The service code (e.g. ``"EOP"`` for end-of-period statements).
+        message_name: The message name (e.g. ``"camt.053"``).
+        scope: The rule scope, e.g. an ISO country code (``"CH"``); ``None`` for global.
+        message_version: The ISO 20022 version, e.g. ``"08"``.
+        container: The container format, e.g. ``"ZIP"``; ``None`` for none.
+        service_option: An optional service option code.
+    """
+
+    service_name: str
+    message_name: str
+    scope: str | None = None
+    message_version: str | None = None
+    container: str | None = None
+    service_option: str | None = None
+
+
+#: The Swiss camt.053.001.08 account-statement download (end-of-period, ZIP container).
+CAMT_053 = BusinessTransactionFormat(
+    service_name="EOP",
+    message_name="camt.053",
+    scope="CH",
+    message_version="08",
+    container="ZIP",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadInitialisation:
+    """The bank's reply to a download-initialisation request (BTD, phase Initialisation).
+
+    Opening a download transaction returns the transaction handle, how many segments the
+    order data was split into, the encrypted symmetric key needed to decrypt it, and the
+    first order-data segment. Further segments (if ``num_segments > 1``) are fetched with
+    transfer requests keyed by ``transaction_id``.
+
+    Attributes:
+        transaction_id: The bank-issued transaction ID, echoed on transfer and receipt.
+        num_segments: The total number of segments the order data was split into.
+        transaction_key: The symmetric transaction key, RSA-encrypted to the subscriber's
+            E002 encryption key; unwrap it with the E002 private key to decrypt the data.
+        segment_number: The 1-based number of the segment carried here (always 1).
+        last_segment: Whether this is the final segment (true when ``num_segments == 1``).
+        order_data_segment: This segment's order data, as the raw base64 text from the wire.
+            Segments are pieces of one base64 stream, so they must be concatenated *before*
+            decoding — never decoded individually.
+    """
+
+    transaction_id: str
+    num_segments: int
+    transaction_key: bytes
+    segment_number: int
+    last_segment: bool
+    order_data_segment: str
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadSegment:
+    """The bank's reply to a download-transfer request (one further order-data segment).
+
+    Attributes:
+        segment_number: The 1-based number of the segment carried here.
+        last_segment: Whether this is the final segment of the transfer.
+        order_data_segment: This segment's order data, as the raw base64 text from the wire
+            (see :class:`DownloadInitialisation.order_data_segment` on concatenation).
+    """
+
+    segment_number: int
+    last_segment: bool
+    order_data_segment: str
+
+
 class OutputFormat(StrEnum):
     """The rendering format for the initialisation letter.
 
