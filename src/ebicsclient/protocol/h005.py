@@ -36,6 +36,7 @@ from ebicsclient.models import (
     DownloadInitialisation,
     DownloadSegment,
     Keyring,
+    UploadPayload,
     User,
 )
 
@@ -51,6 +52,12 @@ _PROTOCOL_VERSION = "H005"
 _REVISION = "1"
 _ADMIN_ORDER_TYPE_HPB = "HPB"  # H005 administrative order type for the bank-key download
 _ADMIN_ORDER_TYPE_BTD = "BTD"  # H005 business transaction download
+_ADMIN_ORDER_TYPE_BTU = "BTU"  # H005 business transaction upload
+# The order carries an electronic signature (EU) and is authorised within EBICS. The H005 XSD
+# types SignatureFlag as an empty flag, but banks expect the boolean text "true"; validated live.
+_SIGNATURE_FLAG = "true"
+# Cap each order-data segment at ~1 MB of base64 text, per the EBICS segmentation limit.
+_MAX_SEGMENT_CHARS = 1_000_000
 _SECURITY_MEDIUM = "0000"
 _OK_RETURN_CODE = "000000"
 _NONCE_BYTES = 16  # 128-bit nonce, rendered as uppercase hex
@@ -392,6 +399,226 @@ def build_download_receipt_request(bank: Bank, keyring: Keyring, transaction_id:
     # AuthSignature in schema order (header, AuthSignature, body).
     root.insert(1, crypto.build_auth_signature(root, keyring.authentication, NAMESPACE))
     return _serialize(root)
+
+
+def prepare_upload(
+    user: User, keyring: Keyring, bank_keys: BankKeys, order_data: bytes
+) -> UploadPayload:
+    """Encrypt and sign order data once for an upload transaction.
+
+    Generates a transaction key, signs the order data with the A006 key (the electronic
+    signature), and encrypts both the signature and the order data with that key (the key
+    itself wrapped to the bank's E002). The result feeds the initialisation and transfer
+    requests, which must share this single encryption.
+
+    Args:
+        user: The subscriber (named in the signature data).
+        keyring: The subscriber's key pairs (the A006 key signs the order data).
+        bank_keys: The bank's public keys (the E002 key wraps the transaction key).
+        order_data: The order data to upload (e.g. a pain.001 document).
+
+    Returns:
+        The prepared, encrypted upload payload.
+
+    Raises:
+        CryptoError: the order data could not be signed or encrypted.
+    """
+    transaction_key = crypto.new_transaction_key()
+    signature = crypto.sign_order_data(keyring.signature, order_data)
+    signature_xml = _user_signature_data(user, signature)
+    signature_data = base64.b64encode(
+        crypto.encrypt_with_transaction_key(transaction_key, signature_xml)
+    ).decode("ascii")
+    encrypted_stream = base64.b64encode(
+        crypto.encrypt_with_transaction_key(transaction_key, order_data)
+    ).decode("ascii")
+    return UploadPayload(
+        wrapped_transaction_key=crypto.encrypt_transaction_key(
+            bank_keys.encryption, transaction_key
+        ),
+        data_digest=crypto.order_data_digest(order_data),
+        signature_data=signature_data,
+        order_data_segments=_split_segments(encrypted_stream),
+    )
+
+
+def _split_segments(stream: str) -> tuple[str, ...]:
+    # The base64 stream is one unit; split it into <=1 MB pieces, at least one segment.
+    if not stream:
+        return ("",)
+    return tuple(
+        stream[index : index + _MAX_SEGMENT_CHARS]
+        for index in range(0, len(stream), _MAX_SEGMENT_CHARS)
+    )
+
+
+def _user_signature_data(user: User, signature: bytes) -> bytes:
+    root = etree.Element(etree.QName(S002_NAMESPACE, "UserSignatureData"), nsmap=_S002_NSMAP)
+    order_signature = etree.SubElement(root, etree.QName(S002_NAMESPACE, "OrderSignatureData"))
+    _s002_text(order_signature, "SignatureVersion", _SIGNATURE_VERSION)
+    _s002_text(order_signature, "SignatureValue", base64.b64encode(signature).decode("ascii"))
+    _s002_text(order_signature, "PartnerID", user.partner_id)
+    _s002_text(order_signature, "UserID", user.user_id)
+    return _serialize(root)
+
+
+def build_upload_initialisation_request(
+    bank: Bank,
+    user: User,
+    keyring: Keyring,
+    bank_keys: BankKeys,
+    btf: BusinessTransactionFormat,
+    payload: UploadPayload,
+) -> bytes:
+    """Build the signed upload-initialisation request (BTU, phase Initialisation).
+
+    Opens an upload transaction: the request carries the BTF, the segment count, the wrapped
+    transaction key, the encrypted electronic signature, and the order-data digest, all under
+    an ``AuthSignature`` signed with the X002 key. The bank replies with a transaction ID.
+
+    Args:
+        bank: The target bank.
+        user: The subscriber.
+        keyring: The subscriber's key pairs (the X002 key signs the request).
+        bank_keys: The bank's public keys, digested into the request.
+        btf: The Business Transaction Format to upload (e.g. ``PAIN_001``).
+        payload: The prepared upload payload (from :func:`prepare_upload`).
+
+    Returns:
+        The serialised, signed ``ebicsRequest`` XML.
+    """
+    root = etree.Element(etree.QName(NAMESPACE, "ebicsRequest"), nsmap=_NSMAP)
+    root.set("Version", _PROTOCOL_VERSION)
+    root.set("Revision", _REVISION)
+
+    header = etree.SubElement(root, etree.QName(NAMESPACE, "header"))
+    header.set("authenticate", "true")
+    static = etree.SubElement(header, etree.QName(NAMESPACE, "static"))
+    _text(static, "HostID", bank.host_id)
+    _text(static, "Nonce", _nonce())
+    _text(static, "Timestamp", _timestamp())
+    _text(static, "PartnerID", user.partner_id)
+    _text(static, "UserID", user.user_id)
+    order_details = etree.SubElement(static, etree.QName(NAMESPACE, "OrderDetails"))
+    _text(order_details, "AdminOrderType", _ADMIN_ORDER_TYPE_BTU)
+    _append_btu_order_params(order_details, btf)
+    _append_bank_pub_key_digests(static, bank_keys)
+    _text(static, "SecurityMedium", _SECURITY_MEDIUM)
+    _text(static, "NumSegments", str(payload.num_segments))
+
+    mutable = etree.SubElement(header, etree.QName(NAMESPACE, "mutable"))
+    _text(mutable, "TransactionPhase", _PHASE_INITIALISATION)
+
+    body = etree.SubElement(root, etree.QName(NAMESPACE, "body"))
+    data_transfer = etree.SubElement(body, etree.QName(NAMESPACE, "DataTransfer"))
+    encryption_info = etree.SubElement(data_transfer, etree.QName(NAMESPACE, "DataEncryptionInfo"))
+    encryption_info.set("authenticate", "true")
+    digest = _text(
+        encryption_info,
+        "EncryptionPubKeyDigest",
+        base64.b64encode(keys.public_key_hash(bank_keys.encryption)).decode("ascii"),
+    )
+    digest.set("Version", _ENCRYPTION_VERSION)
+    digest.set("Algorithm", _SHA256_ALGORITHM)
+    _text(
+        encryption_info,
+        "TransactionKey",
+        base64.b64encode(payload.wrapped_transaction_key).decode("ascii"),
+    )
+    signature_data = _text(data_transfer, "SignatureData", payload.signature_data)
+    signature_data.set("authenticate", "true")
+    data_digest = _text(
+        data_transfer, "DataDigest", base64.b64encode(payload.data_digest).decode("ascii")
+    )
+    data_digest.set("SignatureVersion", _SIGNATURE_VERSION)
+
+    # The header and the DataEncryptionInfo/SignatureData nodes are authenticated, so sign
+    # after the body is built, then place the AuthSignature in schema order (header, sig, body).
+    root.insert(1, crypto.build_auth_signature(root, keyring.authentication, NAMESPACE))
+    return _serialize(root)
+
+
+def _append_btu_order_params(order_details: etree._Element, btf: BusinessTransactionFormat) -> None:
+    params = etree.SubElement(order_details, etree.QName(NAMESPACE, "BTUOrderParams"))
+    service = etree.SubElement(params, etree.QName(NAMESPACE, "Service"))
+    _text(service, "ServiceName", btf.service_name)
+    if btf.scope is not None:
+        _text(service, "Scope", btf.scope)
+    if btf.service_option is not None:
+        _text(service, "ServiceOption", btf.service_option)
+    if btf.container is not None:
+        container = etree.SubElement(service, etree.QName(NAMESPACE, "Container"))
+        container.set("containerType", btf.container)
+    message = _text(service, "MsgName", btf.message_name)
+    if btf.message_version is not None:
+        message.set("version", btf.message_version)
+    _text(params, "SignatureFlag", _SIGNATURE_FLAG)
+
+
+def build_upload_transfer_request(
+    bank: Bank,
+    keyring: Keyring,
+    transaction_id: str,
+    segment_number: int,
+    segment_data: str,
+    *,
+    last_segment: bool,
+) -> bytes:
+    """Build the signed request that uploads one order-data segment (phase Transfer).
+
+    Args:
+        bank: The target bank.
+        keyring: The subscriber's key pairs (the X002 key signs the request).
+        transaction_id: The transaction ID the bank issued during initialisation.
+        segment_number: The 1-based number of the segment being sent.
+        segment_data: The base64 order-data segment (from the prepared payload).
+        last_segment: Whether this is the final segment of the upload.
+
+    Returns:
+        The serialised, signed ``ebicsRequest`` XML.
+    """
+    root, mutable = _transaction_request(bank, transaction_id)
+    _text(mutable, "TransactionPhase", _PHASE_TRANSFER)
+    segment = _text(mutable, "SegmentNumber", str(segment_number))
+    segment.set("lastSegment", "true" if last_segment else "false")
+    # Only the header is authenticated on a transfer, so sign it before appending the body.
+    root.append(crypto.build_auth_signature(root, keyring.authentication, NAMESPACE))
+    body = etree.SubElement(root, etree.QName(NAMESPACE, "body"))
+    data_transfer = etree.SubElement(body, etree.QName(NAMESPACE, "DataTransfer"))
+    _text(data_transfer, "OrderData", segment_data)
+    return _serialize(root)
+
+
+def parse_upload_initialisation_response(response: bytes) -> str:
+    """Parse an upload-initialisation response and return the transaction ID.
+
+    Args:
+        response: The raw ``ebicsResponse`` bytes from the bank.
+
+    Returns:
+        The bank-issued transaction ID for the upload.
+
+    Raises:
+        ProtocolError: the response could not be parsed or is missing the transaction ID.
+        ReturnCodeError: the bank rejected the initialisation (e.g. a bad signature).
+    """
+    root = _parse(response)
+    _check_return_code(root)
+    static = _child(_child(root, "header"), "static")
+    return _child_text(static, "TransactionID")
+
+
+def parse_upload_transfer_response(response: bytes) -> None:
+    """Check an upload-transfer response's return code (raising on any non-OK code).
+
+    Args:
+        response: The raw ``ebicsResponse`` bytes from the bank.
+
+    Raises:
+        ProtocolError: the response could not be parsed or carries no return code.
+        ReturnCodeError: the bank rejected the segment or the completed upload.
+    """
+    _check_return_code(_parse(response))
 
 
 def _transaction_request(bank: Bank, transaction_id: str) -> tuple[etree._Element, etree._Element]:

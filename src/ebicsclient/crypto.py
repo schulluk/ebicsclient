@@ -18,16 +18,21 @@ canonicaliser, but must still be validated against a bank test platform (see doc
 import base64
 import copy
 import hashlib
+import os
 import zlib
 from typing import cast
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import padding as symmetric_padding
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from lxml import etree
 
 from ebicsclient.errors import CryptoError
+
+# EBICS order-data encryption uses a 128-bit AES transaction key.
+_TRANSACTION_KEY_BYTES = 16
 
 # XML-DSig algorithm identifiers used by EBICS.
 _DS_NAMESPACE = "http://www.w3.org/2000/09/xmldsig#"
@@ -150,6 +155,86 @@ def decrypt_order_data(
         return decompressor.decompress(compressed) + decompressor.flush()
     except (ValueError, zlib.error) as error:
         raise CryptoError("Could not decrypt the EBICS order data") from error
+
+
+def new_transaction_key() -> bytes:
+    """Generate a fresh random 128-bit AES transaction key for one upload."""
+    return os.urandom(_TRANSACTION_KEY_BYTES)
+
+
+def encrypt_with_transaction_key(transaction_key: bytes, data: bytes) -> bytes:
+    """Compress and AES-encrypt data the way EBICS protects order and signature data.
+
+    Mirrors :func:`decrypt_order_data`: the data is DEFLATE-compressed, padded to the AES
+    block size, and encrypted with AES-128 in CBC mode under a null IV. The receiver
+    decrypts and inflates; the inflate stops at the end of the compressed stream, so the
+    exact padding does not matter (PKCS#7 is used here as a block-aligning pad).
+
+    Args:
+        transaction_key: The 128-bit AES transaction key (from :func:`new_transaction_key`).
+        data: The plaintext to protect (order data, or the user-signature XML).
+
+    Returns:
+        The compressed, encrypted bytes (to be base64-encoded for the wire).
+
+    Raises:
+        CryptoError: the data could not be compressed or encrypted.
+    """
+    try:
+        compressed = zlib.compress(data)
+        padder = symmetric_padding.PKCS7(algorithms.AES.block_size).padder()
+        padded = padder.update(compressed) + padder.finalize()
+        encryptor = Cipher(algorithms.AES(transaction_key), modes.CBC(_NULL_IV)).encryptor()
+        return encryptor.update(padded) + encryptor.finalize()
+    except (ValueError, zlib.error) as error:
+        raise CryptoError("Could not encrypt the EBICS order data") from error
+
+
+def encrypt_transaction_key(encryption_key: rsa.RSAPublicKey, transaction_key: bytes) -> bytes:
+    """RSA-encrypt the AES transaction key to the bank's E002 public key (PKCS#1 v1.5).
+
+    Args:
+        encryption_key: The bank's E002 encryption public key.
+        transaction_key: The 128-bit AES transaction key to wrap.
+
+    Returns:
+        The RSA-encrypted transaction key (to be base64-encoded for the wire).
+
+    Raises:
+        CryptoError: the transaction key could not be encrypted.
+    """
+    try:
+        return encryption_key.encrypt(transaction_key, padding.PKCS1v15())
+    except ValueError as error:
+        raise CryptoError("Could not encrypt the EBICS transaction key") from error
+
+
+def order_data_digest(order_data: bytes) -> bytes:
+    """Return the SHA-256 digest of the order data (the DataDigest an upload carries)."""
+    return hashlib.sha256(order_data).digest()
+
+
+def sign_order_data(signature_key: rsa.RSAPrivateKey, order_data: bytes) -> bytes:
+    """Compute the A006 electronic signature (EU) over the order data.
+
+    EBICS signature version A006 is RSASSA-PSS with SHA-256, MGF1-SHA-256, and a salt length
+    equal to the digest length (32 bytes). The signature authorises the order inside EBICS.
+
+    Args:
+        signature_key: The subscriber's A006 signature private key.
+        order_data: The order data being uploaded (its raw bytes, before compression).
+
+    Returns:
+        The RSASSA-PSS signature value (to be base64-encoded into the OrderSignatureData).
+    """
+    return signature_key.sign(
+        order_data,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=hashes.SHA256().digest_size,
+        ),
+        hashes.SHA256(),
+    )
 
 
 def digest_authenticated_nodes(root: etree._Element) -> bytes:

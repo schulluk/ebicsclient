@@ -40,6 +40,39 @@ def test_sign_and_verify_round_trip(keyring: Keyring) -> None:
     assert not crypto.verify_rsa_sha256(public_key, b"tampered", signature)
 
 
+def test_order_data_encryption_round_trips_through_decrypt(keyring: Keyring) -> None:
+    order_data = b"<Document>a payment instruction</Document>"
+    transaction_key = crypto.new_transaction_key()
+    encrypted = crypto.encrypt_with_transaction_key(transaction_key, order_data)
+    wrapped = crypto.encrypt_transaction_key(keyring.encryption.public_key(), transaction_key)
+    # The bank would unwrap the key with its E002 private half and decrypt/inflate — which is
+    # exactly what decrypt_order_data does, so the round trip proves the two are inverses.
+    recovered = crypto.decrypt_order_data(keyring.encryption, wrapped, encrypted)
+    assert recovered == order_data
+
+
+def test_a006_order_signature_verifies_with_pss(keyring: Keyring) -> None:
+    order_data = b"<Document>a payment instruction</Document>"
+    signature = crypto.sign_order_data(keyring.signature, order_data)
+    # Verify it as RSASSA-PSS/SHA-256 the way the bank would (A006).
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    keyring.signature.public_key().verify(
+        signature,
+        order_data,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
+        hashes.SHA256(),
+    )
+
+
+def test_order_data_digest_is_sha256(keyring: Keyring) -> None:
+    import hashlib
+
+    order_data = b"<Document/>"
+    assert crypto.order_data_digest(order_data) == hashlib.sha256(order_data).digest()
+
+
 def test_inclusive_c14n_keeps_inherited_namespaces() -> None:
     # EBICS uses inclusive Canonical XML 1.0: an in-scope (inherited) namespace IS
     # emitted on the canonicalised apex — the opposite of exclusive c14n.

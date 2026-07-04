@@ -9,7 +9,8 @@ import zlib
 
 import pytest
 from cryptography import x509
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from lxml import etree
 
 from crypto_helpers import issue_certificate, make_ca, make_hpb_response
@@ -17,7 +18,7 @@ from ebicsclient import crypto, keys
 from ebicsclient.certificates import MappingCertificateProvider, TrustAnchorVerifier
 from ebicsclient.errors import BankCertificateError, ProtocolError, ReturnCodeError
 from ebicsclient.keys import CertificateUsage
-from ebicsclient.models import Bank, Keyring, User
+from ebicsclient.models import PAIN_001, Bank, BankKeys, Keyring, User
 from ebicsclient.protocol import h005
 
 _NS = h005.NAMESPACE
@@ -247,6 +248,104 @@ def test_public_key_from_info_falls_back_to_rsa_key_value(keyring: Keyring) -> N
 
 def _b64_int(value: int) -> str:
     return base64.b64encode(value.to_bytes((value.bit_length() + 7) // 8, "big")).decode("ascii")
+
+
+def _bank_keys_from(bank_keyring: Keyring) -> BankKeys:
+    return BankKeys(
+        authentication=bank_keyring.authentication.public_key(),
+        encryption=bank_keyring.encryption.public_key(),
+    )
+
+
+def test_upload_initialisation_request_is_signed_and_carries_the_btu_details(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    bank_keyring = keys.generate_keyring()
+    bank_keys = _bank_keys_from(bank_keyring)
+    payload = h005.prepare_upload(user, keyring, bank_keys, b"<Document>pay</Document>")
+    root = etree.fromstring(
+        h005.build_upload_initialisation_request(
+            bank, user, keyring, bank_keys, PAIN_001, payload
+        )
+    )
+    assert root.findtext(f".//{{{_NS}}}AdminOrderType") == "BTU"
+    assert root.findtext(f".//{{{_NS}}}ServiceName") == "MCT"
+    assert root.findtext(f".//{{{_NS}}}MsgName") == "pain.001"
+    assert root.findtext(f".//{{{_NS}}}NumSegments") == "1"
+    assert root.findtext(f".//{{{_NS}}}SignatureFlag") == "true"
+    data_digest = root.find(f".//{{{_NS}}}DataDigest")
+    assert data_digest is not None
+    assert data_digest.get("SignatureVersion") == "A006"
+    assert crypto.verify_auth_signature(root, keyring.authentication.public_key())
+
+
+def test_upload_transfer_request_is_signed_and_carries_the_segment(
+    bank: Bank, keyring: Keyring
+) -> None:
+    root = etree.fromstring(
+        h005.build_upload_transfer_request(
+            bank, keyring, "A" * 32, 1, "c2VnbWVudA==", last_segment=True
+        )
+    )
+    assert root.findtext(f".//{{{_NS}}}TransactionPhase") == "Transfer"
+    assert root.findtext(f".//{{{_NS}}}OrderData") == "c2VnbWVudA=="
+    segment = root.find(f".//{{{_NS}}}SegmentNumber")
+    assert segment is not None and segment.get("lastSegment") == "true"
+    assert crypto.verify_auth_signature(root, keyring.authentication.public_key())
+
+
+def test_prepare_upload_round_trips_through_the_bank_side_crypto(
+    user: User, keyring: Keyring
+) -> None:
+    order_data = b"<Document>a payment instruction</Document>"
+    bank_keyring = keys.generate_keyring()
+    payload = h005.prepare_upload(user, keyring, _bank_keys_from(bank_keyring), order_data)
+
+    # The bank unwraps the transaction key with its E002 key and decrypts the order data.
+    encrypted_order_data = base64.b64decode("".join(payload.order_data_segments))
+    recovered = crypto.decrypt_order_data(
+        bank_keyring.encryption, payload.wrapped_transaction_key, encrypted_order_data
+    )
+    assert recovered == order_data
+    assert payload.data_digest == crypto.order_data_digest(order_data)
+
+    # The bank decrypts the SignatureData, reads the A006 signature, and verifies it.
+    signature_xml = crypto.decrypt_order_data(
+        bank_keyring.encryption,
+        payload.wrapped_transaction_key,
+        base64.b64decode(payload.signature_data),
+    )
+    signature_root = etree.fromstring(signature_xml)
+    assert signature_root.findtext(f".//{{{_S002}}}SignatureVersion") == "A006"
+    assert signature_root.findtext(f".//{{{_S002}}}UserID") == user.user_id
+    signature_value = signature_root.findtext(f".//{{{_S002}}}SignatureValue")
+    assert signature_value is not None
+    keyring.signature.public_key().verify(
+        base64.b64decode(signature_value),
+        order_data,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
+        hashes.SHA256(),
+    )
+
+
+def test_parse_upload_initialisation_response_returns_the_transaction_id() -> None:
+    response = (
+        f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static>'
+        f"<TransactionID>{'D' * 32}</TransactionID></static><mutable>"
+        "<TransactionPhase>Initialisation</TransactionPhase><ReturnCode>000000</ReturnCode>"
+        "</mutable></header><body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
+    ).encode()
+    assert h005.parse_upload_initialisation_response(response) == "D" * 32
+
+
+def test_parse_upload_transfer_response_raises_on_error() -> None:
+    response = (
+        f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static/><mutable>'
+        "<TransactionPhase>Transfer</TransactionPhase><ReturnCode>091001</ReturnCode>"
+        "</mutable></header><body><ReturnCode>091001</ReturnCode></body></ebicsResponse>"
+    ).encode()
+    with pytest.raises(ReturnCodeError):
+        h005.parse_upload_transfer_response(response)
 
 
 def _download_response(

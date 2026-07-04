@@ -273,3 +273,49 @@ class Client:
             MessageFormatError: the downloaded camt.053 data could not be parsed.
         """
         return camt053.parse(self.download(CAMT_053))
+
+    def upload(self, btf: BusinessTransactionFormat, order_data: bytes) -> str:
+        """Upload order data for a Business Transaction Format and return the transaction ID.
+
+        Runs the full upload transaction: it signs and encrypts the order data, opens the
+        transaction (initialisation), then sends every segment (transfer). The bank's keys
+        must already be available (call :meth:`hpb` first).
+
+        Args:
+            btf: The Business Transaction Format to upload (e.g. ``PAIN_001``).
+            order_data: The order data to upload (e.g. a pain.001 document as bytes).
+
+        Returns:
+            The bank-issued transaction ID for the upload.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ReturnCodeError: the bank rejected the upload (e.g. a bad signature or order data).
+            CryptoError: the order data could not be signed or encrypted.
+        """
+        if self._bank_keys is None:
+            raise ClientStateError("Upload requires the bank's keys; call hpb() first")
+        logger.info("Upload: opening a %s/%s transaction", btf.service_name, btf.message_name)
+        payload = h005.prepare_upload(self._user, self._keyring, self._bank_keys, order_data)
+        request = h005.build_upload_initialisation_request(
+            self._bank, self._user, self._keyring, self._bank_keys, btf, payload
+        )
+        transaction_id = h005.parse_upload_initialisation_response(self._transport.post(request))
+
+        segments = payload.order_data_segments
+        for number, segment_data in enumerate(segments, start=1):
+            transfer = h005.build_upload_transfer_request(
+                self._bank,
+                self._keyring,
+                transaction_id,
+                number,
+                segment_data,
+                last_segment=number == len(segments),
+            )
+            h005.parse_upload_transfer_response(self._transport.post(transfer))
+        logger.info(
+            "Upload: sent %d segment(s) for transaction %s", len(segments), transaction_id
+        )
+        return transaction_id

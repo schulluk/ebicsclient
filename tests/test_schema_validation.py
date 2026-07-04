@@ -17,7 +17,7 @@ import pytest
 from lxml import etree
 
 from ebicsclient import keys
-from ebicsclient.models import CAMT_053, Bank, BankKeys, Keyring, User
+from ebicsclient.models import CAMT_053, PAIN_001, Bank, BankKeys, Keyring, User
 from ebicsclient.protocol import h005
 
 _SCHEMA_DIR = Path(__file__).parent / "schema" / "H005"
@@ -107,4 +107,29 @@ def test_download_transfer_request_validates(bank: Bank, keyring: Keyring) -> No
 
 def test_download_receipt_request_validates(bank: Bank, keyring: Keyring) -> None:
     request = h005.build_download_receipt_request(bank, keyring, "A" * 32)
+    _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
+
+
+def test_upload_initialisation_request_validates_except_the_signature_flag(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    bank_keys = _bank_keys(keys.generate_keyring())
+    payload = h005.prepare_upload(user, keyring, bank_keys, b"<Document>pay</Document>")
+    request = h005.build_upload_initialisation_request(
+        bank, user, keyring, bank_keys, PAIN_001, payload
+    )
+    schema = _schema("ebics_request_H005.xsd")
+    document = etree.fromstring(request)
+    valid = schema.validate(document)
+    # The H005 XSD types SignatureFlag as an empty flag, but interoperable EBICS clients send
+    # the boolean text "true" and banks expect it (to be confirmed live against ZKB). Assert the
+    # ONLY schema deviation is that known SignatureFlag content — everything else is valid.
+    errors = [error.message for error in schema.error_log]
+    assert valid or (errors and all("SignatureFlag" in error for error in errors)), errors
+
+
+def test_upload_transfer_request_validates(bank: Bank, keyring: Keyring) -> None:
+    request = h005.build_upload_transfer_request(
+        bank, keyring, "A" * 32, 1, "c2VnbWVudA==", last_segment=True
+    )
     _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))

@@ -13,6 +13,7 @@ from ebicsclient.client import Client
 from ebicsclient.errors import ClientStateError, ReturnCodeError
 from ebicsclient.models import (
     CAMT_053,
+    PAIN_001,
     Bank,
     BankKeys,
     InitializationState,
@@ -193,6 +194,52 @@ def test_download_statements_parses_a_camt053_zip(keyring: Keyring) -> None:
     assert statement.identification == "STMT-1"
     assert statement.closing_balance is not None
     assert statement.closing_balance.amount == Decimal("42.00")
+
+
+def _upload_response(phase: str, *, transaction_id: str | None = None) -> bytes:
+    static = f"<TransactionID>{transaction_id}</TransactionID>" if transaction_id else ""
+    return (
+        f'<ebicsResponse xmlns="urn:org:ebics:H005"><header authenticate="true">'
+        f"<static>{static}</static><mutable><TransactionPhase>{phase}</TransactionPhase>"
+        "<ReturnCode>000000</ReturnCode></mutable></header>"
+        "<body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
+    ).encode()
+
+
+def test_upload_requires_hpb_first(keyring: Keyring) -> None:
+    client, _ = _client(_OK_RESPONSE, keyring)
+    with pytest.raises(ClientStateError):
+        client.upload(PAIN_001, b"<Document/>")
+
+
+def test_upload_signs_encrypts_and_sends_init_then_transfer(keyring: Keyring) -> None:
+    responses = [
+        _upload_response("Initialisation", transaction_id="E" * 32),
+        _upload_response("Transfer"),
+    ]
+    client, transport = _download_client(responses, keyring, _bank_keys(keys.generate_keyring()))
+    assert client.upload(PAIN_001, b"<Document>pay</Document>") == "E" * 32
+    # Initialisation opens the transaction (BTU); the transfer sends the single segment.
+    assert len(transport.posts) == 2
+    opened = etree.fromstring(transport.posts[0])
+    assert opened.findtext(f".//{{{_NS}}}AdminOrderType") == "BTU"
+    assert opened.findtext(f".//{{{_NS}}}MsgName") == "pain.001"
+    transferred = etree.fromstring(transport.posts[1])
+    assert transferred.findtext(f".//{{{_NS}}}TransactionPhase") == "Transfer"
+    assert transferred.find(f".//{{{_NS}}}OrderData") is not None
+
+
+def test_upload_raises_when_the_bank_rejects_the_signature(keyring: Keyring) -> None:
+    reject = (
+        b'<ebicsResponse xmlns="urn:org:ebics:H005"><header><static/>'
+        b"<mutable><TransactionPhase>Initialisation</TransactionPhase>"
+        b"<ReturnCode>091001</ReturnCode></mutable></header>"
+        b"<body><ReturnCode>091001</ReturnCode></body></ebicsResponse>"
+    )
+    client, _ = _download_client([reject], keyring, _bank_keys(keys.generate_keyring()))
+    with pytest.raises(ReturnCodeError) as caught:
+        client.upload(PAIN_001, b"<Document/>")
+    assert caught.value.code == "091001"
 
 
 def test_download_raises_when_the_bank_reports_an_error(keyring: Keyring) -> None:

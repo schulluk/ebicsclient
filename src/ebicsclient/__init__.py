@@ -45,6 +45,7 @@ from ebicsclient.keys import (
 )
 from ebicsclient.models import (
     CAMT_053,
+    PAIN_001,
     Balance,
     Bank,
     BankKeys,
@@ -56,6 +57,7 @@ from ebicsclient.models import (
     Letter,
     OutputFormat,
     Statement,
+    UploadPayload,
     User,
 )
 
@@ -71,6 +73,7 @@ except PackageNotFoundError:  # running from a source tree without an install
 
 __all__ = [
     "CAMT_053",
+    "PAIN_001",
     "Balance",
     "Bank",
     "BankCertificateError",
@@ -103,6 +106,7 @@ __all__ = [
     "Statement",
     "TransportError",
     "TrustAnchorVerifier",
+    "UploadPayload",
     "User",
     "__version__",
     "deserialize_keyring",

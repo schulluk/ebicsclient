@@ -122,6 +122,15 @@ CAMT_053 = BusinessTransactionFormat(
     container="ZIP",
 )
 
+#: The Swiss pain.001.001.09 payment-submission upload (no container). Matches the ZKB ``XE2``
+#: order type (``MCT / CH / pain.001 / 09``); see docs/10-btf-order-types.md.
+PAIN_001 = BusinessTransactionFormat(
+    service_name="MCT",
+    message_name="pain.001",
+    scope="CH",
+    message_version="09",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class DownloadInitialisation:
@@ -248,6 +257,35 @@ class Statement:
     closing_balance: Balance | None
     balances: tuple[Balance, ...]
     entries: tuple[Entry, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class UploadPayload:
+    """The encrypted, signed pieces of one upload, shared across its request phases.
+
+    An upload encrypts the order data once (and the order signature with the same transaction
+    key), so the initialisation and transfer requests are built from this single prepared
+    payload. It carries no plaintext secret: the transaction key is wrapped to the bank, and
+    the signature and order-data segments are already encrypted.
+
+    Attributes:
+        wrapped_transaction_key: The AES transaction key, RSA-encrypted to the bank's E002 key.
+        data_digest: The SHA-256 digest of the order data (the request's DataDigest value).
+        signature_data: The compressed, encrypted A006 order signature (UserSignatureData), as
+            base64 text — carried in the initialisation request.
+        order_data_segments: The compressed, encrypted order data as base64 text, split into
+            one or more segments carried by the transfer requests.
+    """
+
+    wrapped_transaction_key: bytes
+    data_digest: bytes
+    signature_data: str
+    order_data_segments: tuple[str, ...]
+
+    @property
+    def num_segments(self) -> int:
+        """The number of order-data segments (the request's NumSegments)."""
+        return len(self.order_data_segments)
 
 
 class OutputFormat(StrEnum):
