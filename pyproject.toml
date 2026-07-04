@@ -33,6 +33,10 @@ dependencies = [
 # Opt-in extras (runtime-detected). See docs/04.
 [project.optional-dependencies]
 pdf = ["reportlab"]
+# certifi ships Mozilla's CA bundle for environments whose system trust store is empty
+# (e.g. the python.org macOS build). It is MPL-2.0, not on the core BSD/MIT/Apache allowlist,
+# so it stays an opt-in extra: the transport uses it only if it is importable.
+tls = ["certifi"]
 
 [project.urls]
 Homepage = "https://github.com/schulluk/ebicsclient"
@@ -42,7 +46,7 @@ Issues = "https://github.com/schulluk/ebicsclient/issues"
 # Dev/test tooling — PEP 735, not published to consumers. See docs/06.
 [dependency-groups]
 test = ["pytest", "python-dotenv"]
-dev = ["ruff", "mypy", "lxml-stubs", "reportlab", { include-group = "test" }]
+dev = ["ruff", "mypy", "lxml-stubs", "reportlab", "certifi", { include-group = "test" }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ebicsclient"]
@@ -60,7 +64,7 @@ python_version = "3.11"
 strict = true
 files = ["src"]
 
-# reportlab (optional [pdf] extra) ships no type information.
+# reportlab (optional [pdf] extra) and certifi (optional [tls] extra) ship no type information.
 [[tool.mypy.overrides]]
-module = ["reportlab.*"]
+module = ["reportlab.*", "certifi"]
 ignore_missing_imports = true

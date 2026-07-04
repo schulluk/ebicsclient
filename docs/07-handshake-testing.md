@@ -48,11 +48,17 @@ EBICS_BANK_E002_HASH=<from ZKB>
 ## 2. Install and sanity-check locally first
 
 ```bash
-uv sync --group dev          # installs reportlab too, so the PDF letter path works
+uv sync --group dev          # installs reportlab (PDF letter) and certifi (TLS trust) too
 uv run ruff check && uv run mypy --strict src && uv run pytest
 ```
 
 All three must be green before you touch the network.
+
+> **TLS trust.** Some Python builds (notably the python.org macOS build) ship an empty system
+> trust store, so HTTPS verification fails with `CERTIFICATE_VERIFY_FAILED`. The transport falls
+> back to the Mozilla CA bundle when the optional `certifi` (`tls` extra) is importable — the dev
+> group above already includes it. For a non-dev install, add it with
+> `pip install "ebicsclient[tls]"`.
 
 ## 3. Run the handshake, one step at a time
 

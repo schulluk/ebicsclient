@@ -18,12 +18,11 @@ The channel governs how the **pain.002 status message** is delivered back.
 
 | Option | Selected |
 | --- | --- |
-| e-Banking | ✅ currently |
-| Datalink EBICS | ⬜ |
+| e-Banking | ⬜ |
+| Datalink EBICS | ✅ (set 2026-07-04) |
 
-> **Action for uploads (M3).** It is currently **e-Banking**. To receive the pain.002 back over
-> EBICS after a pain.001 upload, this must be switched to **Datalink EBICS**. It does not affect
-> the camt.053 download (read path), so M2 validation can proceed as-is.
+> Switched to **Datalink EBICS** so the pain.002 status message is returned over EBICS after a
+> pain.001 upload (M3). Does not affect the camt.053 download.
 
 ### pain.001 / camt.05x versions
 
@@ -42,10 +41,10 @@ The simulation emits **camt.053.001.08**, which matches our download BTF
 | --- | --- |
 | Technical pain.002 message (technische pain.002-Meldung) | ❌ off |
 | pain.002 validation message (pain.002-Validierungsmeldung) | ✅ on |
-| Simulate a reject for every third transaction (Für jede dritte Transaktion einen Reject erzeugen) | ⬜ off |
+| Simulate a reject for every third transaction (Für jede dritte Transaktion einen Reject erzeugen) | ✅ (set 2026-07-04) |
 
-So today a successful upload returns a **pain.002 validation message** and no simulated rejects.
-Turning the reject simulation on is how we will exercise the negative upload path in M3.
+So an upload returns a **pain.002 validation message**, and **every third transaction is rejected**
+in the simulation — which lets M3 exercise both the accepted and the rejected pain.002 paths.
 
 ### Simulated booking details in the camt messages
 

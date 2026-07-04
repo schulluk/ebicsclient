@@ -83,4 +83,21 @@ class Transport:
 def _build_ssl_context() -> ssl.SSLContext:
     context = ssl.create_default_context()
     context.minimum_version = ssl.TLSVersion.TLSv1_2
+    _add_certifi_trust(context)
     return context
+
+
+def _add_certifi_trust(context: ssl.SSLContext) -> None:
+    # Some Python builds (notably the python.org macOS build) ship an empty system trust
+    # store, so create_default_context() verifies nothing. If the optional certifi bundle
+    # (the ``tls`` extra) is importable, add its CAs on top of the system defaults — additive,
+    # so an environment with a working system store keeps using it. Absent certifi, the
+    # system store is used as-is (the caller can still point SSL_CERT_FILE at a bundle).
+    try:
+        import certifi
+    except ImportError:
+        return
+    try:
+        context.load_verify_locations(cafile=certifi.where())
+    except (OSError, ssl.SSLError) as error:
+        logger.debug("Could not load the certifi CA bundle: %s", error)
