@@ -36,8 +36,14 @@ EBICS_BANK_E002_HASH=<from ZKB>
 
 > **Profile.** ZKB offers EBICS 3.0 **"mit Schlüsseln"** (self-signed keys — what this client
 > implements) and **"mit Zertifikaten"** (CA certificates); each has *different* bank-key hashes.
-> Use the "mit Schlüsseln" hashes. **Download order type is `XTD`** on the test platform (it
-> returns test results), not the production `EOP/camt.053` BTF.
+> Use the "mit Schlüsseln" hashes.
+>
+> **Download BTF.** The test platform's subscriber configuration lists the Business Transaction
+> Formats it serves. The `download` step below uses the production `EOP/camt.053` BTF
+> (`ServiceName=EOP`, `Scope=CH`, `MsgName=camt.053` v`08`, `Container=ZIP`) that
+> `Client.download` sends — confirm that BTF appears in the platform's own list before running.
+> (An earlier draft of this doc claimed the test platform only accepts an `XTD` order type; that
+> was uncited and is not relied on here — treat the platform's configuration UI as the oracle.)
 
 ## 2. Install and sanity-check locally first
 
@@ -74,6 +80,19 @@ uv run python examples/zkb_handshake.py hpb
 Steps 1–4 do not depend on ZKB having activated you, so you can confirm `INI`/`HIA` are
 accepted immediately. Step 5 only works once the signed letter has been processed.
 
+Once `HPB` succeeds, download the statements — this exercises the full three-phase download
+(initialisation → transfer → receipt), the segment reassembly, and the order-data decryption:
+
+```bash
+# 6) Fetch the EOP/camt.053 statements and print their closing balances.
+#    Set EBICS_DOWNLOAD_PATH to also write the raw order data (a ZIP) for inspection.
+uv run python examples/zkb_handshake.py download
+```
+
+The `download` step re-runs `HPB` first (a fresh process holds no bank keys), then opens the
+download transaction. It prints the number of statements and, per statement, the account and
+closing balance.
+
 ## 4. What to expect, and how to read failures
 
 - **`ini` / `hia`** — success prints an accepted message; the bank returned `000000`. A
@@ -96,8 +115,18 @@ accepted immediately. Step 5 only works once the signed letter has been processe
   values ZKB publishes for the test platform (set `EBICS_BANK_*_HASH` to have the runner do
   it for you). A **mismatch means do not trust the keys** — stop and investigate.
 
+- **`download`** — a `ReturnCodeError` at initialisation with code `090005`
+  (`EBICS_NO_DOWNLOAD_DATA_AVAILABLE`) simply means the test account has no statements for the
+  period; it is not a bug. A rejection on the BTF (e.g. `091005` unsupported order type) means
+  the `EOP/camt.053` BTF is not what the platform serves — check its configuration and adjust.
+  If the transaction succeeds but `CryptoError` is raised while decrypting, the **order-data
+  cipher** is the suspect (as with `hpb`). If decryption succeeds but `MessageFormatError` is
+  raised, the payload parsed as bytes but is not the camt.053 shape the parser expects —
+  inspect it via `EBICS_DOWNLOAD_PATH`.
+
 ## 5. When it works
 
 Green `INI`/`HIA`/`HPB` against the test platform validates the whole handshake end to end,
-including the two failure-prone areas. That is the gate for moving on to the statement
-download (`EOP/camt.053.001.08`), which is the next milestone after the handshake.
+including the two failure-prone areas. A successful `download` on top of that validates the
+three-phase download transaction, segment reassembly, order-data decryption, and camt.053
+parsing — the complete read (MVP) path.
