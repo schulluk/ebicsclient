@@ -17,7 +17,7 @@ import pytest
 from lxml import etree
 
 from ebicsclient import keys
-from ebicsclient.models import Bank, Keyring, User
+from ebicsclient.models import CAMT_053, Bank, BankKeys, Keyring, User
 from ebicsclient.protocol import h005
 
 _SCHEMA_DIR = Path(__file__).parent / "schema" / "H005"
@@ -80,3 +80,31 @@ def test_hia_order_data_validates_against_the_orders_schema(
 ) -> None:
     order_data = _order_data(h005.build_hia_request(bank, user, keyring))
     _assert_valid(_schema("ebics_orders_H005.xsd"), order_data)
+
+
+def _bank_keys(bank_keyring: Keyring) -> BankKeys:
+    return BankKeys(
+        authentication=bank_keyring.authentication.public_key(),
+        encryption=bank_keyring.encryption.public_key(),
+    )
+
+
+def test_download_initialisation_request_validates(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    request = h005.build_download_initialisation_request(
+        bank, user, keyring, _bank_keys(keys.generate_keyring()), CAMT_053
+    )
+    _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
+
+
+def test_download_transfer_request_validates(bank: Bank, keyring: Keyring) -> None:
+    request = h005.build_download_transfer_request(
+        bank, keyring, "A" * 32, 2, last_segment=True
+    )
+    _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
+
+
+def test_download_receipt_request_validates(bank: Bank, keyring: Keyring) -> None:
+    request = h005.build_download_receipt_request(bank, keyring, "A" * 32)
+    _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
