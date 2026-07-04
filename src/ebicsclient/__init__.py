@@ -46,6 +46,7 @@ from ebicsclient.keys import (
 from ebicsclient.models import (
     CAMT_053,
     PAIN_001,
+    PAIN_002,
     Balance,
     Bank,
     BankKeys,
@@ -74,6 +75,7 @@ except PackageNotFoundError:  # running from a source tree without an install
 __all__ = [
     "CAMT_053",
     "PAIN_001",
+    "PAIN_002",
     "Balance",
     "Bank",
     "BankCertificateError",

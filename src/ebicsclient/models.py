@@ -131,6 +131,16 @@ PAIN_001 = BusinessTransactionFormat(
     message_version="09",
 )
 
+#: The Swiss pain.002.001.10 payment-status-report download (ZIP container). Matches the ZKB
+#: ``Z01`` order type (``PSR / CH / pain.002 / 10 / ZIP``); see docs/10-btf-order-types.md.
+PAIN_002 = BusinessTransactionFormat(
+    service_name="PSR",
+    message_name="pain.002",
+    scope="CH",
+    message_version="10",
+    container="ZIP",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class DownloadInitialisation:

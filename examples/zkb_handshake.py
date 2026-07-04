@@ -13,6 +13,8 @@ Steps, matching the EBICS initialisation ceremony (see docs/05, docs/07):
     hpb        download the bank's public keys and verify their hashes
     hashes     print your own public-key hashes (what the letter certifies)
     download   fetch the EOP/camt.053 statements and print their closing balances
+    upload     upload a pain.001 payment file (path in EBICS_UPLOAD_PATH)
+    pain002    fetch the pain.002 payment status report(s) and print them
 
 Run each step in order, e.g.::
 
@@ -39,6 +41,7 @@ Optional:
     EBICS_BANK_X002_HASH      expected bank X002 hash, to verify HPB (spaces/case ignored)
     EBICS_BANK_E002_HASH      expected bank E002 hash, to verify HPB
     EBICS_DOWNLOAD_PATH       where `download` writes the raw order data (default: none)
+    EBICS_UPLOAD_PATH         path to the pain.001 file that `upload` sends
 """
 
 import argparse
@@ -62,7 +65,7 @@ from ebicsclient import (
     save_keyring,
 )
 from ebicsclient.formats import camt053
-from ebicsclient.models import CAMT_053, Keyring
+from ebicsclient.models import CAMT_053, PAIN_001, PAIN_002, Keyring
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_ENV_FILE = _REPO_ROOT.parent / "local" / ".env"
@@ -75,7 +78,10 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="Manual EBICS handshake runner.")
     parser.add_argument(
-        "step", choices=["generate", "ini", "hia", "letter", "hpb", "hashes", "download"]
+        "step",
+        choices=[
+            "generate", "ini", "hia", "letter", "hpb", "hashes", "download", "upload", "pain002"
+        ],
     )
     step = parser.parse_args().step
 
@@ -162,6 +168,35 @@ def _download() -> int:
     return 0
 
 
+def _upload() -> int:
+    path = Path(os.environ["EBICS_UPLOAD_PATH"])
+    order_data = path.read_bytes()
+    client = _build_client()
+    # A fresh process holds no bank keys yet; fetch them (HPB) before uploading.
+    client.hpb()
+    transaction_id = client.upload(PAIN_001, order_data)
+    print(f"Upload accepted: {len(order_data)} bytes, transaction {transaction_id}.")
+    print("The bank accepted the EBICS envelope, signature, and encryption.")
+    print("Download the pain.002 (via the 'download' step with the PSR BTF) for the result.")
+    return 0
+
+
+def _pain002() -> int:
+    import io
+    import zipfile
+
+    client = _build_client()
+    client.hpb()
+    order_data = client.download(PAIN_002)
+    print(f"pain.002 download succeeded: {len(order_data)} bytes.")
+    # pain.002 comes as a ZIP of status-report XML documents; print each.
+    with zipfile.ZipFile(io.BytesIO(order_data)) as archive:
+        for name in sorted(archive.namelist()):
+            print(f"----- {name} -----")
+            print(archive.read(name).decode("utf-8", errors="replace"))
+    return 0
+
+
 def _build_client() -> Client:
     return Client(_bank(), _user(), _load_keyring())
 
@@ -225,6 +260,8 @@ _STEPS = {
     "hpb": _hpb,
     "hashes": _hashes,
     "download": _download,
+    "upload": _upload,
+    "pain002": _pain002,
 }
 
 
