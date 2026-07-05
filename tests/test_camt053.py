@@ -4,6 +4,7 @@ import datetime
 import io
 import zipfile
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +13,9 @@ from ebicsclient.formats import camt053
 from ebicsclient.models import CreditDebit
 
 _NS = "urn:iso:std:iso:20022:tech:xsd:camt.053.001.08"
+# A real ZKB test-platform statement (account identifiers scrubbed) — a golden regression
+# vector produced by the bank, exercising the structures a synthetic sample would miss.
+_ZKB_SAMPLE = Path(__file__).parent / "data" / "camt053_zkb_sample.xml"
 
 
 def _document(*, identification: str = "STMT-2026-001") -> bytes:
@@ -119,6 +123,40 @@ def test_parse_rejects_a_non_decimal_amount() -> None:
     document = _document().replace(b"<Amt Ccy=\"CHF\">1250.50</Amt>", b'<Amt Ccy="CHF">lots</Amt>')
     with pytest.raises(MessageFormatError):
         camt053.parse(document)
+
+
+def test_parse_real_zkb_statement_balances_reconcile() -> None:
+    (statement,) = camt053.parse(_ZKB_SAMPLE.read_bytes())
+    assert statement.iban == "CH4200000000000000000"
+    # Three balances: opening booked, closing booked, closing available.
+    assert [balance.code for balance in statement.balances] == ["OPBD", "CLBD", "CLAV"]
+    assert statement.opening_balance is not None
+    assert statement.opening_balance.amount == Decimal("500000")
+    assert statement.closing_balance is not None
+    assert statement.closing_balance.amount == Decimal("507339")
+    assert statement.closing_balance.currency == "CHF"
+
+    # The parser's Decimal amounts and credit/debit signs reconcile the statement exactly.
+    assert len(statement.entries) == 10
+    net = sum(
+        (entry.amount if entry.credit_debit is CreditDebit.CREDIT else -entry.amount)
+        for entry in statement.entries
+    )
+    assert statement.opening_balance.amount + net == statement.closing_balance.amount
+
+
+def test_parse_real_zkb_statement_reads_representative_entries() -> None:
+    (statement,) = camt053.parse(_ZKB_SAMPLE.read_bytes())
+    entries = statement.entries
+    # The initiated payment, booked as a debit with its account-servicer reference.
+    assert entries[0].amount == Decimal("100")
+    assert entries[0].credit_debit is CreditDebit.DEBIT
+    assert entries[0].status == "BOOK"
+    assert entries[0].reference == "2208890000003"
+    assert entries[0].booking_date == datetime.date(2026, 7, 8)
+    # A fractional FX credit and a charge/interest entry without a reference are handled too.
+    assert Decimal("170.8") in [entry.amount for entry in entries]
+    assert any(entry.reference is None for entry in entries)
 
 
 def test_parse_rejects_a_bad_credit_debit_indicator() -> None:
