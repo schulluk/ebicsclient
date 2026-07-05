@@ -186,6 +186,8 @@ def _download_response(
 
 
 def _receipt_response() -> bytes:
+    # A real bank acknowledges a positive receipt with 011000 EBICS_DOWNLOAD_POSTPROCESS_DONE
+    # (validated live on ZKB), so the fixture mirrors that rather than 000000.
     namespace = h005.NAMESPACE
     root = etree.Element(etree.QName(namespace, "ebicsResponse"), nsmap={None: namespace})
     root.set("Version", "H005")
@@ -195,10 +197,12 @@ def _receipt_response() -> bytes:
     etree.SubElement(header, etree.QName(namespace, "static"))
     mutable = etree.SubElement(header, etree.QName(namespace, "mutable"))
     etree.SubElement(mutable, etree.QName(namespace, "TransactionPhase")).text = "Receipt"
-    etree.SubElement(mutable, etree.QName(namespace, "ReturnCode")).text = "000000"
-    etree.SubElement(mutable, etree.QName(namespace, "ReportText")).text = "[EBICS_OK] OK"
+    etree.SubElement(mutable, etree.QName(namespace, "ReturnCode")).text = "011000"
+    etree.SubElement(mutable, etree.QName(namespace, "ReportText")).text = (
+        "[EBICS_DOWNLOAD_POSTPROCESS_DONE] Positive acknowledgement received"
+    )
     body = etree.SubElement(root, etree.QName(namespace, "body"))
-    etree.SubElement(body, etree.QName(namespace, "ReturnCode")).text = "000000"
+    etree.SubElement(body, etree.QName(namespace, "ReturnCode")).text = "011000"
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 

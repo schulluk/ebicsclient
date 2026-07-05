@@ -148,14 +148,16 @@ PAIN_001 = BusinessTransactionFormat(
     message_version="09",
 )
 
-#: The Swiss pain.002.001.10 payment-status-report download (ZIP container). Matches the ZKB
-#: ``Z01`` order type (``PSR / CH / pain.002 / 10 / ZIP``); see docs/10-btf-order-types.md.
+#: The Swiss pain.002.001.10 payment-status-report download (the ZKB ``Z01`` order type).
+#: The bank's own HTD registry lists this BTF as ``PSR / CH / pain.002 / 10`` **without** a
+#: Container — a request carrying ``Container=ZIP`` is rejected with ``091005``, even though
+#: ZKB's human-readable catalogue shows a ZIP column (the *delivered file* is a ZIP; the BTF
+#: registration is container-less). Validated live; see docs/09 and docs/10.
 PAIN_002 = BusinessTransactionFormat(
     service_name="PSR",
     message_name="pain.002",
     scope="CH",
     message_version="10",
-    container="ZIP",
 )
 
 

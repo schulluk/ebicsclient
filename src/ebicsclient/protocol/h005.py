@@ -60,6 +60,9 @@ _SIGNATURE_FLAG = "true"
 _MAX_SEGMENT_CHARS = 1_000_000
 _SECURITY_MEDIUM = "0000"
 _OK_RETURN_CODE = "000000"
+# The bank acknowledges a positive download receipt with 011000
+# EBICS_DOWNLOAD_POSTPROCESS_DONE — a success code, not an error (validated live on ZKB).
+_RECEIPT_OK_CODES = frozenset({"000000", "011000"})
 _NONCE_BYTES = 16  # 128-bit nonce, rendered as uppercase hex
 _SHA256_ALGORITHM = "http://www.w3.org/2001/04/xmlenc#sha256"
 _PHASE_INITIALISATION = "Initialisation"
@@ -587,6 +590,32 @@ def build_upload_transfer_request(
     data_transfer = etree.SubElement(body, etree.QName(NAMESPACE, "DataTransfer"))
     _text(data_transfer, "OrderData", segment_data)
     return _serialize(root)
+
+
+def parse_download_receipt_response(response: bytes) -> None:
+    """Check a download-receipt response, accepting the positive-acknowledgement code.
+
+    The bank answers a positive receipt with ``011000`` (EBICS_DOWNLOAD_POSTPROCESS_DONE),
+    which confirms the download was marked delivered — a success, not an error. Any other
+    non-OK code is raised.
+
+    Args:
+        response: The raw ``ebicsResponse`` bytes from the bank.
+
+    Raises:
+        ProtocolError: the response could not be parsed or carries no return code.
+        ReturnCodeError: the bank reported a code that is neither OK nor the positive
+            receipt acknowledgement.
+    """
+    root = _parse(response)
+    return_codes = root.findall(f".//{{{NAMESPACE}}}ReturnCode")
+    if not return_codes:
+        raise ProtocolError("EBICS response carried no ReturnCode")
+    for return_code in return_codes:
+        if return_code.text is not None and return_code.text not in _RECEIPT_OK_CODES:
+            parent = return_code.getparent()
+            report = parent.find(f"{{{NAMESPACE}}}ReportText") if parent is not None else None
+            raise ReturnCodeError(return_code.text, report.text if report is not None else None)
 
 
 def parse_upload_initialisation_response(response: bytes) -> str:

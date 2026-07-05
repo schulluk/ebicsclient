@@ -328,6 +328,34 @@ def test_prepare_upload_round_trips_through_the_bank_side_crypto(
     )
 
 
+def _receipt_response(code: str, report: str) -> bytes:
+    return (
+        f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static/><mutable>'
+        f"<TransactionPhase>Receipt</TransactionPhase><ReturnCode>{code}</ReturnCode>"
+        f"<ReportText>{report}</ReportText></mutable></header>"
+        f"<body><ReturnCode>{code}</ReturnCode></body></ebicsResponse>"
+    ).encode()
+
+
+def test_parse_download_receipt_response_accepts_the_positive_acknowledgement() -> None:
+    # A real bank answers a positive receipt with 011000 (validated live on ZKB).
+    h005.parse_download_receipt_response(
+        _receipt_response("011000", "[EBICS_DOWNLOAD_POSTPROCESS_DONE] Positive acknowledgement")
+    )  # does not raise
+
+
+def test_parse_download_receipt_response_accepts_plain_ok() -> None:
+    h005.parse_download_receipt_response(_receipt_response("000000", "[EBICS_OK] OK"))
+
+
+def test_parse_download_receipt_response_raises_on_a_genuine_error() -> None:
+    with pytest.raises(ReturnCodeError) as caught:
+        h005.parse_download_receipt_response(
+            _receipt_response("091010", "[EBICS_TX_UNKNOWN_TXID] Transaction unknown")
+        )
+    assert caught.value.code == "091010"
+
+
 def test_parse_upload_initialisation_response_returns_the_transaction_id() -> None:
     response = (
         f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static>'

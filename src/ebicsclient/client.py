@@ -258,10 +258,11 @@ class Client:
             segments.append(segment.order_data_segment)
 
         # Acknowledge the completed transfer so the bank marks the download as delivered.
+        # The bank answers with 011000 EBICS_DOWNLOAD_POSTPROCESS_DONE — a success code.
         receipt = h005.build_download_receipt_request(
             self._bank, self._keyring, initialisation.transaction_id
         )
-        h005.raise_for_return_code(self._transport.post(receipt))
+        h005.parse_download_receipt_response(self._transport.post(receipt))
         logger.info(
             "Download: received %d segment(s) for transaction %s",
             initialisation.num_segments,

@@ -108,7 +108,7 @@ The test platform separates two facilities, which matters when interpreting resu
 - **The EBICS channel** is validated independently. Our `BTU` upload is **accepted** by the EBICS
   server (correct AuthSignature, A006 signature, and encryption), but on this platform it does
   **not** feed the web simulation, and the web simulation's `camt.053`/`pain.002` are **not**
-  exposed back over the EBICS download queue (EOP stays `090005`; PSR is `091005`).
+  exposed back over the EBICS download queue (EOP stays `090005`).
 
 Practical consequences for testing:
 
@@ -119,12 +119,33 @@ Practical consequences for testing:
   reconcile: opening + credits − debits = closing; the initiated payment appears as a debit).
 - `pain.002` is confirmed to be `pain.002.001.10` — matching the `PAIN_002` BTF version.
 
+## What HAA/HTD and BTF probing established (2026-07-05)
+
+Live probes of the EBICS admin order types settled the two open EBICS-channel questions with
+the bank's own registry as the oracle:
+
+- **`HTD`** (subscriber permissions) confirms every BTF we send matches the registration exactly
+  — including `EOP/CH/camt.053/08/ZIP` and `MCT/CH/pain.001/09` (`NumSigRequired=0`). Crucially,
+  `PSR/CH/pain.002/10` is registered **without a Container**: requesting it with `Container=ZIP`
+  is what produced `091005` (the human-readable catalogue's "ZIP" column describes the delivered
+  file, not the BTF registration). `PAIN_002` was fixed accordingly and now gets `090005`.
+- **`HAA`** (order types with data available) returns an **empty list** — the bank itself
+  confirms nothing is ever queued on the EBICS side, regardless of upload route. EBICS `BTU`
+  uploads are accepted (all variants probed: with/without `SignatureFlag`, with/without
+  `fileName`, valid content, same-day execution date, well past the manual's 10–30 s processing
+  window) but never appear in the web table nor produce EBICS-retrievable results, and web-upload
+  results are never bridged to the EBICS queues (even when left unconsumed in the GUI).
+- These probes also completed **full live BTD download transactions** (initialise → decrypt →
+  receipt) and revealed that the bank acknowledges a positive receipt with
+  **`011000 EBICS_DOWNLOAD_POSTPROCESS_DONE`** — a success code the client now accepts.
+
+The manual (`ZKB_Testplattform_BenHB.pdf`, §3.7.4–3.7.5) documents EBICS submission/retrieval as
+supported, so the dead EBICS→simulation bridge contradicts the platform's own documentation.
+
 ## Open items surfaced by these settings
 
-1. **Run the live camt.053 download** (M2) and confirm the parser reads the Standard-Buchungen
-   entries and the closing balance from real simulation output.
-2. **Switch the channel to Datalink EBICS** before the first pain.001 upload (M3), or the pain.002
-   will be routed to e-Banking instead of returned over EBICS.
-3. **camt.054 booking advices** (QRR/SCOR/LSV are enabled here) are a plausible near-term read
-   feature after the camt.053 MVP, but remain out of the current MVP scope.
-4. **Enable the reject simulation** when validating the upload error path (M3).
+1. **Ask ZKB support** (`support.epayment@zkb.ch`) why EBICS-submitted pain.001 files are
+   accepted but never processed by the simulation, and why simulation results never appear in
+   the EBICS download queues (`HAA` stays empty) — the Benutzerhandbuch documents both flows.
+2. **camt.054 booking advices** (QRR/SCOR/LSV are enabled here) are a plausible near-term read
+   feature after the MVP, but remain out of the current scope.
