@@ -96,6 +96,29 @@ These are the entries our camt.053 parser will encounter in the downloaded state
 
 **Legend:** ✅ verified · ⏳ implemented, live-verification pending · ⬜ not started / out of scope.
 
+## How the simulation is driven (validated 2026-07-05)
+
+The test platform separates two facilities, which matters when interpreting results:
+
+- **The web upload** (*Zahlungsdatei/Simulationsdaten hochladen*) is what drives the simulation.
+  Uploading a `pain.001` there validates it against `pain.001.001.09.ch.03` and, if accepted,
+  books it and produces a result ZIP (downloadable via the page's **Download** button) containing:
+  a `Protokoll.txt` validation log, two `pain.002.001.10` status reports (technical `ACTC`, then
+  business `ACCP`/`RJCT`), and — once accepted — a `camt.053` statement.
+- **The EBICS channel** is validated independently. Our `BTU` upload is **accepted** by the EBICS
+  server (correct AuthSignature, A006 signature, and encryption), but on this platform it does
+  **not** feed the web simulation, and the web simulation's `camt.053`/`pain.002` are **not**
+  exposed back over the EBICS download queue (EOP stays `090005`; PSR is `091005`).
+
+Practical consequences for testing:
+
+- The test account (a CHF account, IBAN kept out of the repo) is held at ZKB, so the **debtor
+  agent BIC must be `ZKBKCHZZ`**; a foreign agent is rejected with `AGNT` /
+  "Multibanking ist nicht zulässig".
+- Our `camt.053` parser is validated against a **real** ZKB simulation statement (balances
+  reconcile: opening + credits − debits = closing; the initiated payment appears as a debit).
+- `pain.002` is confirmed to be `pain.002.001.10` — matching the `PAIN_002` BTF version.
+
 ## Open items surfaced by these settings
 
 1. **Run the live camt.053 download** (M2) and confirm the parser reads the Standard-Buchungen
