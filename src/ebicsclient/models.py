@@ -74,6 +74,23 @@ class BankKeys:
     encryption: rsa.RSAPublicKey
 
 
+@dataclass(frozen=True, slots=True)
+class BankKeyHashes:
+    """The SHA-256 hashes that pin the bank's public keys across sessions.
+
+    Used to detect if the bank's HPB keys ever change from a previously trusted set (or from
+    the values the bank publishes out of band). The caller persists these two hashes wherever
+    it likes — they are public values, not secrets — and passes them back to pin a later HPB.
+
+    Attributes:
+        authentication: The SHA-256 EBICS hash of the bank's X002 authentication key.
+        encryption: The SHA-256 EBICS hash of the bank's E002 encryption key.
+    """
+
+    authentication: bytes
+    encryption: bytes
+
+
 class InitializationState(StrEnum):
     """The outcome of submitting subscriber keys with INI or HIA.
 

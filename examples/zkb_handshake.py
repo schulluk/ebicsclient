@@ -55,6 +55,9 @@ from dotenv import load_dotenv
 
 from ebicsclient import (
     Bank,
+    BankKeyHashes,
+    BankKeyMismatchError,
+    BankKeys,
     Client,
     InitializationState,
     OutputFormat,
@@ -90,6 +93,9 @@ def main() -> int:
     except KeyError as error:
         print(f"Missing environment variable: {error}", file=sys.stderr)
         return 2
+    except BankKeyMismatchError as error:
+        print(f"Bank-key pin mismatch — NOT trusting the keys: {error}", file=sys.stderr)
+        return 1
 
 
 def _generate() -> int:
@@ -131,11 +137,27 @@ def _letter() -> int:
 
 
 def _hpb() -> int:
-    bank_keys = _build_client().hpb()
+    bank_keys = _fetch_bank_keys(_build_client())
     print("HPB succeeded. Verify the bank's public-key hashes below.")
     _report_hash("Bank authentication (X002)", bank_keys.authentication, "EBICS_BANK_X002_HASH")
     _report_hash("Bank encryption    (E002)", bank_keys.encryption, "EBICS_BANK_E002_HASH")
     return 0
+
+
+def _fetch_bank_keys(client: Client) -> BankKeys:
+    """Run HPB, pinning to the published bank-key hashes when both are configured."""
+    return client.hpb(pinned=_pinned_hashes())
+
+
+def _pinned_hashes() -> BankKeyHashes | None:
+    authentication = os.environ.get("EBICS_BANK_X002_HASH")
+    encryption = os.environ.get("EBICS_BANK_E002_HASH")
+    if authentication is None or encryption is None:
+        return None
+    return BankKeyHashes(
+        authentication=bytes.fromhex(_normalise(authentication)),
+        encryption=bytes.fromhex(_normalise(encryption)),
+    )
 
 
 def _hashes() -> int:
@@ -146,7 +168,7 @@ def _hashes() -> int:
 def _download() -> int:
     client = _build_client()
     # A fresh process holds no bank keys yet; fetch them (HPB) before downloading.
-    client.hpb()
+    _fetch_bank_keys(client)
     order_data = client.download(CAMT_053)
     print(f"Download succeeded: {len(order_data)} bytes of order data.")
 
@@ -173,7 +195,7 @@ def _upload() -> int:
     order_data = path.read_bytes()
     client = _build_client()
     # A fresh process holds no bank keys yet; fetch them (HPB) before uploading.
-    client.hpb()
+    _fetch_bank_keys(client)
     transaction_id = client.upload(PAIN_001, order_data)
     print(f"Upload accepted: {len(order_data)} bytes, transaction {transaction_id}.")
     print("The bank accepted the EBICS envelope, signature, and encryption.")
@@ -186,7 +208,7 @@ def _pain002() -> int:
     import zipfile
 
     client = _build_client()
-    client.hpb()
+    _fetch_bank_keys(client)
     order_data = client.download(PAIN_002)
     print(f"pain.002 download succeeded: {len(order_data)} bytes.")
     # pain.002 comes as a ZIP of status-report XML documents; print each.

@@ -19,6 +19,7 @@ from ebicsclient.certificates import (
 from ebicsclient.client import Client
 from ebicsclient.errors import (
     BankCertificateError,
+    BankKeyMismatchError,
     CertificateError,
     ClientStateError,
     CryptoError,
@@ -35,6 +36,7 @@ from ebicsclient.errors import (
 )
 from ebicsclient.keys import (
     CertificateUsage,
+    bank_key_hashes,
     deserialize_keyring,
     generate_keyring,
     generate_self_signed_certificate,
@@ -49,6 +51,7 @@ from ebicsclient.models import (
     PAIN_002,
     Balance,
     Bank,
+    BankKeyHashes,
     BankKeys,
     BusinessTransactionFormat,
     CreditDebit,
@@ -80,6 +83,8 @@ __all__ = [
     "Bank",
     "BankCertificateError",
     "BankCertificateVerifier",
+    "BankKeyHashes",
+    "BankKeyMismatchError",
     "BankKeys",
     "BusinessTransactionFormat",
     "CertificateError",
@@ -111,6 +116,7 @@ __all__ = [
     "UploadPayload",
     "User",
     "__version__",
+    "bank_key_hashes",
     "deserialize_keyring",
     "generate_keyring",
     "generate_self_signed_certificate",

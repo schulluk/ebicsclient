@@ -28,7 +28,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 from ebicsclient.errors import KeyringDecryptionError, KeyringError, KeyringFormatError
-from ebicsclient.models import Keyring
+from ebicsclient.models import BankKeyHashes, BankKeys, Keyring
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +124,25 @@ def generate_self_signed_certificate(
         .not_valid_after(now + datetime.timedelta(days=_CERTIFICATE_VALIDITY_DAYS))
         .add_extension(_key_usage(usage), critical=True)
         .sign(private_key, hashes.SHA256())
+    )
+
+
+def bank_key_hashes(bank_keys: BankKeys) -> BankKeyHashes:
+    """Compute the pinning hashes for a bank's public keys.
+
+    A convenience for trust-on-first-use pinning: after a first HPB, hash the returned keys,
+    persist the two hashes, and pass them back to :meth:`ebicsclient.Client.hpb` on later runs
+    to detect any change in the bank's keys.
+
+    Args:
+        bank_keys: The bank's public keys (from HPB).
+
+    Returns:
+        The SHA-256 hashes of the authentication (X002) and encryption (E002) keys.
+    """
+    return BankKeyHashes(
+        authentication=public_key_hash(bank_keys.authentication),
+        encryption=public_key_hash(bank_keys.encryption),
     )
 
 

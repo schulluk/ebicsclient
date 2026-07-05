@@ -8,17 +8,18 @@ fetching the bank's keys (HPB) and downloading statements.
 import base64
 import logging
 
-from ebicsclient import crypto, letter
+from ebicsclient import crypto, keys, letter
 from ebicsclient.certificates import (
     DEFAULT_CERTIFICATE_PROVIDER,
     BankCertificateVerifier,
     CertificateProvider,
 )
-from ebicsclient.errors import ClientStateError, ReturnCodeError
+from ebicsclient.errors import BankKeyMismatchError, ClientStateError, ReturnCodeError
 from ebicsclient.formats import camt053
 from ebicsclient.models import (
     CAMT_053,
     Bank,
+    BankKeyHashes,
     BankKeys,
     BusinessTransactionFormat,
     InitializationState,
@@ -167,13 +168,20 @@ class Client:
             raise
         return InitializationState.SUBMITTED
 
-    def hpb(self) -> BankKeys:
+    def hpb(self, *, pinned: BankKeyHashes | None = None) -> BankKeys:
         """Send HPB — download, store, and return the bank's public keys.
 
         Sends a signed HPB request, decrypts the response with the E002 key, and stores
         the bank's authentication (X002) and encryption (E002) public keys on the client
         (also available via :attr:`bank_keys`). Verify their hashes against the values the
         bank publishes out of band before trusting them.
+
+        Args:
+            pinned: If given, the downloaded keys must hash to these values or
+                :class:`~ebicsclient.errors.BankKeyMismatchError` is raised. Pin to a
+                previously trusted set (:func:`~ebicsclient.bank_key_hashes` after a first
+                HPB, persisted by you) or to the bank's published hashes. ``None`` disables
+                pinning.
 
         Returns:
             The bank's public keys.
@@ -182,6 +190,7 @@ class Client:
             TransportError: the request could not be delivered.
             ProtocolError: the response could not be parsed.
             ReturnCodeError: the bank rejected the request.
+            BankKeyMismatchError: pinning was requested and the keys did not match.
             CryptoError: the response could not be decrypted.
         """
         logger.info("HPB: requesting the bank's public keys from host %s", self._bank.host_id)
@@ -189,8 +198,20 @@ class Client:
         authentication, encryption = h005.parse_hpb_response(
             self._transport.post(request), self._keyring, self._bank_certificate_verifier
         )
-        self._bank_keys = BankKeys(authentication=authentication, encryption=encryption)
+        bank_keys = BankKeys(authentication=authentication, encryption=encryption)
+        if pinned is not None:
+            self._verify_pinned(bank_keys, pinned)
+        self._bank_keys = bank_keys
         return self._bank_keys
+
+    @staticmethod
+    def _verify_pinned(bank_keys: BankKeys, pinned: BankKeyHashes) -> None:
+        actual = keys.bank_key_hashes(bank_keys)
+        if actual != pinned:
+            # The keys are not what we pinned — do not store or trust them.
+            raise BankKeyMismatchError(
+                "The bank's HPB keys do not match the pinned hashes; refusing to trust them"
+            )
 
     def download(self, btf: BusinessTransactionFormat) -> bytes:
         """Download order data for a Business Transaction Format and return the plaintext.

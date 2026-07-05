@@ -10,7 +10,7 @@ from lxml import etree
 from crypto_helpers import make_download_responses, make_hpb_response
 from ebicsclient import keys
 from ebicsclient.client import Client
-from ebicsclient.errors import ClientStateError, ReturnCodeError
+from ebicsclient.errors import BankKeyMismatchError, ClientStateError, ReturnCodeError
 from ebicsclient.models import (
     CAMT_053,
     PAIN_001,
@@ -253,6 +253,37 @@ def test_download_raises_when_the_bank_reports_an_error(keyring: Keyring) -> Non
     with pytest.raises(ReturnCodeError) as caught:
         client.download(CAMT_053)
     assert caught.value.code == "090005"
+
+
+def test_hpb_pinning_accepts_matching_bank_keys(keyring: Keyring) -> None:
+    bank_keyring = keys.generate_keyring()
+    client, _ = _client(make_hpb_response(keyring, bank_keyring), keyring)
+    # Pin to the correct hashes (as a caller would after a first, trusted HPB).
+    pinned = keys.bank_key_hashes(
+        BankKeys(
+            authentication=bank_keyring.authentication.public_key(),
+            encryption=bank_keyring.encryption.public_key(),
+        )
+    )
+    assert client.hpb(pinned=pinned).encryption.public_numbers() == (
+        bank_keyring.encryption.public_key().public_numbers()
+    )
+
+
+def test_hpb_pinning_rejects_changed_bank_keys(keyring: Keyring) -> None:
+    bank_keyring = keys.generate_keyring()
+    client, _ = _client(make_hpb_response(keyring, bank_keyring), keyring)
+    # Pin to a different bank's hashes — the downloaded keys must not be trusted.
+    other = keys.generate_keyring()
+    pinned = keys.bank_key_hashes(
+        BankKeys(
+            authentication=other.authentication.public_key(),
+            encryption=other.encryption.public_key(),
+        )
+    )
+    with pytest.raises(BankKeyMismatchError):
+        client.hpb(pinned=pinned)
+    assert client.bank_keys is None  # a mismatch never caches the keys
 
 
 def test_make_ini_letter_renders_html(keyring: Keyring) -> None:

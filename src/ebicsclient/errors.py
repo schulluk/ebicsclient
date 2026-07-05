@@ -125,6 +125,15 @@ class ProtocolError(EbicsError):
     """The bank's response violated the expected EBICS protocol or could not be parsed."""
 
 
+class BankKeyMismatchError(ProtocolError):
+    """The bank's HPB public keys did not match the pinned values.
+
+    Raised when HPB is pinned (a previously trusted set of bank-key hashes, or the values the
+    bank publishes out of band) and the freshly downloaded keys hash to something different.
+    The keys must not be trusted — a mismatch means a changed or spoofed bank key. Fail closed.
+    """
+
+
 class BankCertificateError(ProtocolError):
     """The bank's certificate from the HPB response failed verification.
 
