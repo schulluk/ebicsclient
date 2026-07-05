@@ -6,9 +6,8 @@ first bank targeted for protocol validation.
 
 ## The bar: this software moves money
 
-This library talks to banks. Today it reads statements; **eventually it initiates payments** — it moves
-real money — and even the read-only MVP handles live credentials and account data. **Correctness and
-security are the product.** A banking library people trust (and pay for) is the entire value proposition;
+This library talks to banks. It reads statements **and initiates payments** — it moves real money — and
+it handles live credentials and account data throughout. **Correctness and security are the product.** A banking library people trust (and pay for) is the entire value proposition;
 the moment it feels sloppy, that value is gone.
 
 So **hold every line to a hardened standard from day one** — including the read-only MVP, because shortcuts
@@ -75,10 +74,14 @@ repeating that class of bug:
 
 ## Scope discipline
 
-MVP = download-only: key init (INI/HIA/HPB) → fetch `EOP/camt.053.001.08` → parse closing balances.
-Do **not** build uploads (pain.001), distributed signatures (EDS), or multi-bank quirk handling until
-the ZKB download path works end-to-end. Scope creep is what turns a stable standard into a maintenance
-burden.
+MVP = read **and** write, validated live against ZKB: key init (INI/HIA/HPB) → download
+`EOP/camt.053.001.08` and parse balances → upload `MCT/pain.001.001.09` with the A006 electronic
+signature. All of this is built and bank-accepted.
+
+Still deliberately **out of scope** — do not build until there is a concrete need and a way to
+validate it: distributed signatures (EDS), a pain.002 status-report parser, camt.052/camt.054
+reporting, non-H005 EBICS versions, and multi-bank quirk handling. The `protocol/` and `formats/`
+seams exist for these. Scope creep is what turns a stable standard into a maintenance burden.
 
 ## Workflow
 
