@@ -50,10 +50,9 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    # Environment secrets are only visible to jobs that reference their environment; if
+    # PYPI_API_TOKEN lives in a differently named environment (or is a repo secret), adjust.
     environment: pypi
-    permissions:
-      # OIDC token for PyPI Trusted Publishing — no API token stored in the repo.
-      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -62,3 +61,5 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
