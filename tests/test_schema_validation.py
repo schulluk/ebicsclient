@@ -110,6 +110,16 @@ def test_download_receipt_request_validates(bank: Bank, keyring: Keyring) -> Non
     _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
 
 
+@pytest.mark.parametrize("admin_order_type", ["HAA", "HTD"])
+def test_admin_download_request_validates(
+    admin_order_type: str, bank: Bank, user: User, keyring: Keyring
+) -> None:
+    request = h005.build_admin_download_initialisation_request(
+        bank, user, keyring, _bank_keys(keys.generate_keyring()), admin_order_type
+    )
+    _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
+
+
 def test_upload_initialisation_request_validates_except_the_signature_flag(
     bank: Bank, user: User, keyring: Keyring
 ) -> None:

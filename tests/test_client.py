@@ -8,10 +8,15 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
-from crypto_helpers import make_download_responses, make_hpb_response
+from crypto_helpers import make_download_responses, make_hpb_response, sign_response
 from ebicsclient import keys
 from ebicsclient.client import Client
-from ebicsclient.errors import BankKeyMismatchError, ClientStateError, ReturnCodeError
+from ebicsclient.errors import (
+    BankKeyMismatchError,
+    ClientStateError,
+    ResponseAuthenticationError,
+    ReturnCodeError,
+)
 from ebicsclient.models import (
     CAMT_053,
     PAIN_001,
@@ -151,10 +156,19 @@ def test_download_requires_hpb_first(keyring: Keyring) -> None:
         client.download(CAMT_053)
 
 
-def test_download_returns_the_decrypted_order_data_single_segment(keyring: Keyring) -> None:
+@pytest.fixture(scope="module")
+def bank_keyring() -> Keyring:
+    return keys.generate_keyring()
+
+
+def test_download_returns_the_decrypted_order_data_single_segment(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
     order_data = b"<Document>a single-segment statement</Document>"
-    responses = make_download_responses(keyring, order_data, num_segments=1)
-    client, transport = _download_client(responses, keyring, _bank_keys(keys.generate_keyring()))
+    responses = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
     assert client.download(CAMT_053) == order_data
     # Initialisation + receipt only (no transfer): the first request opens, the last receipts.
     assert len(transport.posts) == 2
@@ -163,10 +177,12 @@ def test_download_returns_the_decrypted_order_data_single_segment(keyring: Keyri
     assert opened.findtext(f".//{{{_NS}}}ServiceName") == "EOP"
 
 
-def test_download_reassembles_multiple_segments(keyring: Keyring) -> None:
+def test_download_reassembles_multiple_segments(keyring: Keyring, bank_keyring: Keyring) -> None:
     order_data = b"<Document>" + b"x" * 5000 + b"</Document>"
-    responses = make_download_responses(keyring, order_data, num_segments=3)
-    client, transport = _download_client(responses, keyring, _bank_keys(keys.generate_keyring()))
+    responses = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=3
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
     assert client.download(CAMT_053) == order_data
     # Initialisation + two transfers + receipt.
     assert len(transport.posts) == 4
@@ -176,7 +192,34 @@ def test_download_reassembles_multiple_segments(keyring: Keyring) -> None:
     assert phases == ["Initialisation", "Transfer", "Transfer", "Receipt"]
 
 
-def test_download_statements_parses_a_camt053_zip(keyring: Keyring) -> None:
+def test_download_rejects_an_unsigned_response(keyring: Keyring, bank_keyring: Keyring) -> None:
+    # Strip the bank's AuthSignature off an otherwise valid response: the client must
+    # refuse it before looking at anything else — including the return code.
+    responses = make_download_responses(
+        keyring, b"<Document/>", bank_keyring=bank_keyring, num_segments=1
+    )
+    root = etree.fromstring(responses[0])
+    signature = root.find(f"{{{_NS}}}AuthSignature")
+    assert signature is not None
+    root.remove(signature)
+    client, _ = _download_client([etree.tostring(root)], keyring, _bank_keys(bank_keyring))
+    with pytest.raises(ResponseAuthenticationError):
+        client.download(CAMT_053)
+
+
+def test_download_rejects_a_response_signed_by_the_wrong_key(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    imposter = keys.generate_keyring()
+    responses = make_download_responses(
+        keyring, b"<Document/>", bank_keyring=imposter, num_segments=1
+    )
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(ResponseAuthenticationError):
+        client.download(CAMT_053)
+
+
+def test_download_statements_parses_a_camt053_zip(keyring: Keyring, bank_keyring: Keyring) -> None:
     document = (
         b'<?xml version="1.0" encoding="UTF-8"?>'
         b'<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.08"><BkToCstmrStmt>'
@@ -189,31 +232,40 @@ def test_download_statements_parses_a_camt053_zip(keyring: Keyring) -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("statement.xml", document)
-    responses = make_download_responses(keyring, buffer.getvalue(), num_segments=1)
-    client, _ = _download_client(responses, keyring, _bank_keys(keys.generate_keyring()))
+    responses = make_download_responses(
+        keyring, buffer.getvalue(), bank_keyring=bank_keyring, num_segments=1
+    )
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring))
     (statement,) = client.download_statements()
     assert statement.identification == "STMT-1"
     assert statement.closing_balance is not None
     assert statement.closing_balance.amount == Decimal("42.00")
 
 
-def _upload_response(phase: str, *, transaction_id: str | None = None) -> bytes:
+def _upload_response(
+    phase: str, bank_keyring: Keyring, *, transaction_id: str | None = None
+) -> bytes:
     static = f"<TransactionID>{transaction_id}</TransactionID>" if transaction_id else ""
-    return (
+    response = (
         f'<ebicsResponse xmlns="urn:org:ebics:H005"><header authenticate="true">'
         f"<static>{static}</static><mutable><TransactionPhase>{phase}</TransactionPhase>"
         "<ReturnCode>000000</ReturnCode></mutable></header>"
         "<body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
     ).encode()
+    return sign_response(response, bank_keyring)
 
 
-def test_download_payment_status_reports_parses_a_pain002_zip(keyring: Keyring) -> None:
+def test_download_payment_status_reports_parses_a_pain002_zip(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
     document = (Path(__file__).parent / "data" / "pain002_part.xml").read_bytes()
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("report.xml", document)
-    responses = make_download_responses(keyring, buffer.getvalue(), num_segments=1)
-    client, transport = _download_client(responses, keyring, _bank_keys(keys.generate_keyring()))
+    responses = make_download_responses(
+        keyring, buffer.getvalue(), bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
     (report,) = client.download_payment_status_reports()
     assert report.group_status == "PART"
     assert len(report.rejected_transactions) == 2
@@ -227,12 +279,14 @@ def test_upload_requires_hpb_first(keyring: Keyring) -> None:
         client.upload(PAIN_001, b"<Document/>")
 
 
-def test_upload_signs_encrypts_and_sends_init_then_transfer(keyring: Keyring) -> None:
+def test_upload_signs_encrypts_and_sends_init_then_transfer(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
     responses = [
-        _upload_response("Initialisation", transaction_id="E" * 32),
-        _upload_response("Transfer"),
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        _upload_response("Transfer", bank_keyring),
     ]
-    client, transport = _download_client(responses, keyring, _bank_keys(keys.generate_keyring()))
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
     assert client.upload(PAIN_001, b"<Document>pay</Document>") == "E" * 32
     # Initialisation opens the transaction (BTU); the transfer sends the single segment.
     assert len(transport.posts) == 2
@@ -244,30 +298,65 @@ def test_upload_signs_encrypts_and_sends_init_then_transfer(keyring: Keyring) ->
     assert transferred.find(f".//{{{_NS}}}OrderData") is not None
 
 
-def test_upload_raises_when_the_bank_rejects_the_signature(keyring: Keyring) -> None:
-    reject = (
-        b'<ebicsResponse xmlns="urn:org:ebics:H005"><header><static/>'
+def test_upload_raises_when_the_bank_rejects_the_signature(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    reject = sign_response(
+        b'<ebicsResponse xmlns="urn:org:ebics:H005"><header authenticate="true"><static/>'
         b"<mutable><TransactionPhase>Initialisation</TransactionPhase>"
-        b"<ReturnCode>091001</ReturnCode></mutable></header>"
-        b"<body><ReturnCode>091001</ReturnCode></body></ebicsResponse>"
+        b"<ReturnCode>091002</ReturnCode></mutable></header>"
+        b"<body><ReturnCode>091002</ReturnCode></body></ebicsResponse>",
+        bank_keyring,
     )
-    client, _ = _download_client([reject], keyring, _bank_keys(keys.generate_keyring()))
+    client, _ = _download_client([reject], keyring, _bank_keys(bank_keyring))
     with pytest.raises(ReturnCodeError) as caught:
         client.upload(PAIN_001, b"<Document/>")
-    assert caught.value.code == "091001"
+    assert caught.value.code == "091002"
 
 
-def test_download_raises_when_the_bank_reports_an_error(keyring: Keyring) -> None:
-    error = (
+def test_download_raises_when_the_bank_reports_an_error(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    error = sign_response(
         b'<ebicsResponse xmlns="urn:org:ebics:H005">'
-        b"<header><static/><mutable><TransactionPhase>Initialisation</TransactionPhase>"
+        b'<header authenticate="true"><static/>'
+        b"<mutable><TransactionPhase>Initialisation</TransactionPhase>"
         b"<ReturnCode>090005</ReturnCode></mutable></header>"
-        b"<body><ReturnCode>090005</ReturnCode></body></ebicsResponse>"
+        b"<body><ReturnCode>090005</ReturnCode></body></ebicsResponse>",
+        bank_keyring,
     )
-    client, _ = _download_client([error], keyring, _bank_keys(keys.generate_keyring()))
+    client, _ = _download_client([error], keyring, _bank_keys(bank_keyring))
     with pytest.raises(ReturnCodeError) as caught:
         client.download(CAMT_053)
     assert caught.value.code == "090005"
+
+
+def test_subscriber_info_runs_the_htd_admin_download(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    order_data = (Path(__file__).parent / "data" / "htd_zkb_sample.xml").read_bytes()
+    responses = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    info = client.subscriber_info()
+    assert info.user_id == "USER1"
+    opened = etree.fromstring(transport.posts[0])
+    assert opened.findtext(f".//{{{_NS}}}AdminOrderType") == "HTD"
+    assert opened.find(f".//{{{_NS}}}StandardOrderParams") is not None
+
+
+def test_available_order_types_runs_the_haa_admin_download(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    order_data = f'<HAAResponseOrderData xmlns="{_NS}"/>'.encode()
+    responses = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    assert client.available_order_types() == []
+    opened = etree.fromstring(transport.posts[0])
+    assert opened.findtext(f".//{{{_NS}}}AdminOrderType") == "HAA"
 
 
 def test_hpb_pinning_accepts_matching_bank_keys(keyring: Keyring) -> None:

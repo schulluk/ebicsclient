@@ -15,6 +15,8 @@ Steps, matching the EBICS initialisation ceremony (see docs/05, docs/07):
     download   fetch the EOP/camt.053 statements and print their closing balances
     upload     upload a pain.001 payment file (path in EBICS_UPLOAD_PATH)
     pain002    fetch the pain.002 payment status report(s) and print them
+    haa        list the order types with data available at the bank
+    htd        show the subscriber data registered at the bank
 
 Run each step in order, e.g.::
 
@@ -83,7 +85,8 @@ def main() -> int:
     parser.add_argument(
         "step",
         choices=[
-            "generate", "ini", "hia", "letter", "hpb", "hashes", "download", "upload", "pain002"
+            "generate", "ini", "hia", "letter", "hpb", "hashes", "download", "upload",
+            "pain002", "haa", "htd",
         ],
     )
     step = parser.parse_args().step
@@ -219,6 +222,34 @@ def _pain002() -> int:
     return 0
 
 
+def _haa() -> int:
+    client = _build_client()
+    _fetch_bank_keys(client)
+    order_types = client.available_order_types()
+    if not order_types:
+        print("HAA: no order types currently have data available.")
+        return 0
+    print(f"HAA: {len(order_types)} order type(s) with data available:")
+    for btf in order_types:
+        print(f"  {btf.service_name}/{btf.scope or '-'}/{btf.message_name}"
+              f" v{btf.message_version or '-'} container={btf.container or '-'}")
+    return 0
+
+
+def _htd() -> int:
+    client = _build_client()
+    _fetch_bank_keys(client)
+    info = client.subscriber_info()
+    print(f"HTD: user {info.user_id} (status {info.user_status}), name: {info.name}")
+    print(f"  permissions: {len(info.permissions)}, partner order types: {len(info.order_types)}")
+    for entry in info.order_types:
+        service = entry.service
+        btf = (f"{service.service_name}/{service.scope or '-'}/{service.message_name}"
+               f" v{service.message_version or '-'}") if service else "-"
+        print(f"  {entry.admin_order_type:<4} {btf:<40} {entry.description or ''}")
+    return 0
+
+
 def _build_client() -> Client:
     return Client(_bank(), _user(), _load_keyring())
 
@@ -284,6 +315,8 @@ _STEPS = {
     "download": _download,
     "upload": _upload,
     "pain002": _pain002,
+    "haa": _haa,
+    "htd": _htd,
 }
 
 

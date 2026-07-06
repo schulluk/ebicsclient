@@ -32,6 +32,7 @@ from ebicsclient.models import (
     OutputFormat,
     PaymentStatusReport,
     Statement,
+    SubscriberInfo,
     User,
 )
 from ebicsclient.protocol import h005
@@ -240,13 +241,31 @@ class Client:
             ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
             CryptoError: the order data could not be decrypted.
         """
-        if self._bank_keys is None:
-            raise ClientStateError("Download requires the bank's keys; call hpb() first")
+        bank_keys = self._require_bank_keys("Download")
         logger.info("Download: opening a %s/%s transaction", btf.service_name, btf.message_name)
         request = h005.build_download_initialisation_request(
-            self._bank, self._user, self._keyring, self._bank_keys, btf
+            self._bank, self._user, self._keyring, bank_keys, btf
         )
-        initialisation = h005.parse_download_initialisation_response(self._transport.post(request))
+        return self._run_download_transaction(request, bank_keys)
+
+    def _require_bank_keys(self, operation: str) -> BankKeys:
+        if self._bank_keys is None:
+            raise ClientStateError(f"{operation} requires the bank's keys; call hpb() first")
+        return self._bank_keys
+
+    def _post_verified(self, request: bytes, bank_keys: BankKeys) -> bytes:
+        # Every ebicsResponse is authenticated with the bank's X002 signature; verify it
+        # BEFORE trusting anything in the response — including its return code.
+        response = self._transport.post(request)
+        h005.verify_response_signature(response, bank_keys.authentication)
+        return response
+
+    def _run_download_transaction(
+        self, initialisation_request: bytes, bank_keys: BankKeys
+    ) -> bytes:
+        initialisation = h005.parse_download_initialisation_response(
+            self._post_verified(initialisation_request, bank_keys)
+        )
 
         # Order data is one base64 stream split into NumSegments pieces: fetch the rest, in
         # order, driven by the authoritative segment count from the initialisation response.
@@ -259,7 +278,9 @@ class Client:
                 number,
                 last_segment=number == initialisation.num_segments,
             )
-            segment = h005.parse_download_segment_response(self._transport.post(transfer))
+            segment = h005.parse_download_segment_response(
+                self._post_verified(transfer, bank_keys)
+            )
             segments.append(segment.order_data_segment)
 
         # Acknowledge the completed transfer so the bank marks the download as delivered.
@@ -267,7 +288,7 @@ class Client:
         receipt = h005.build_download_receipt_request(
             self._bank, self._keyring, initialisation.transaction_id
         )
-        h005.parse_download_receipt_response(self._transport.post(receipt))
+        h005.parse_download_receipt_response(self._post_verified(receipt, bank_keys))
         logger.info(
             "Download: received %d segment(s) for transaction %s",
             initialisation.num_segments,
@@ -280,6 +301,60 @@ class Client:
         return crypto.decrypt_order_data(
             self._keyring.encryption, initialisation.transaction_key, encrypted_order_data
         )
+
+    def available_order_types(self) -> list[BusinessTransactionFormat]:
+        """Download the order types for which the bank currently holds data (HAA).
+
+        Runs the administrative ``HAA`` download and returns the Business Transaction
+        Formats with data waiting — an authoritative "is there anything to fetch?" check.
+        The bank's keys must already be available (call :meth:`hpb` first).
+
+        Returns:
+            The order types with data available (empty when nothing is waiting).
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ResponseAuthenticationError: a response failed signature verification.
+            ReturnCodeError: the bank rejected the request.
+            CryptoError: the order data could not be decrypted.
+        """
+        bank_keys = self._require_bank_keys("HAA")
+        logger.info("HAA: requesting the order types with data available")
+        request = h005.build_admin_download_initialisation_request(
+            self._bank, self._user, self._keyring, bank_keys, "HAA"
+        )
+        return h005.parse_available_order_types(
+            self._run_download_transaction(request, bank_keys)
+        )
+
+    def subscriber_info(self) -> SubscriberInfo:
+        """Download the bank's registered data for this subscriber (HTD).
+
+        Runs the administrative ``HTD`` download and returns the bank's authoritative
+        view of the subscriber: the user's status and name, the permissions granted, and
+        every order type registered for the partner — the ground truth for diagnosing
+        rejected order types. The bank's keys must already be available (call :meth:`hpb`
+        first).
+
+        Returns:
+            The subscriber's registered data.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ResponseAuthenticationError: a response failed signature verification.
+            ReturnCodeError: the bank rejected the request.
+            CryptoError: the order data could not be decrypted.
+        """
+        bank_keys = self._require_bank_keys("HTD")
+        logger.info("HTD: requesting the subscriber data registered at the bank")
+        request = h005.build_admin_download_initialisation_request(
+            self._bank, self._user, self._keyring, bank_keys, "HTD"
+        )
+        return h005.parse_subscriber_info(self._run_download_transaction(request, bank_keys))
 
     def download_statements(self) -> list[Statement]:
         """Download the end-of-period camt.053 statements and parse them.
@@ -390,14 +465,15 @@ class Client:
             ReturnCodeError: the bank rejected the upload (e.g. a bad signature or order data).
             CryptoError: the order data could not be signed or encrypted.
         """
-        if self._bank_keys is None:
-            raise ClientStateError("Upload requires the bank's keys; call hpb() first")
+        bank_keys = self._require_bank_keys("Upload")
         logger.info("Upload: opening a %s/%s transaction", btf.service_name, btf.message_name)
-        payload = h005.prepare_upload(self._user, self._keyring, self._bank_keys, order_data)
+        payload = h005.prepare_upload(self._user, self._keyring, bank_keys, order_data)
         request = h005.build_upload_initialisation_request(
-            self._bank, self._user, self._keyring, self._bank_keys, btf, payload
+            self._bank, self._user, self._keyring, bank_keys, btf, payload
         )
-        transaction_id = h005.parse_upload_initialisation_response(self._transport.post(request))
+        transaction_id = h005.parse_upload_initialisation_response(
+            self._post_verified(request, bank_keys)
+        )
 
         segments = payload.order_data_segments
         for number, segment_data in enumerate(segments, start=1):
@@ -409,7 +485,7 @@ class Client:
                 segment_data,
                 last_segment=number == len(segments),
             )
-            h005.parse_upload_transfer_response(self._transport.post(transfer))
+            h005.parse_upload_transfer_response(self._post_verified(transfer, bank_keys))
         logger.info(
             "Upload: sent %d segment(s) for transaction %s", len(segments), transaction_id
         )

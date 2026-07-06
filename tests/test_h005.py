@@ -6,6 +6,7 @@ the exact H005 schema must still be validated against a bank test platform.
 
 import base64
 import zlib
+from pathlib import Path
 
 import pytest
 from cryptography import x509
@@ -13,12 +14,13 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from lxml import etree
 
-from crypto_helpers import issue_certificate, make_ca, make_hpb_response
+from crypto_helpers import issue_certificate, make_ca, make_hpb_response, sign_response
 from ebicsclient import crypto, keys
 from ebicsclient.certificates import MappingCertificateProvider, TrustAnchorVerifier
 from ebicsclient.errors import (
     BankCertificateError,
     ProtocolError,
+    ResponseAuthenticationError,
     ReturnCodeError,
     UnknownReturnCodeError,
 )
@@ -404,6 +406,112 @@ def test_check_return_code_fails_closed_on_an_empty_return_code() -> None:
     ).encode()
     with pytest.raises(ProtocolError):
         h005.raise_for_return_code(response)
+
+
+def _signed_response(bank_keyring: Keyring) -> bytes:
+    response = (
+        f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static/>'
+        "<mutable><TransactionPhase>Initialisation</TransactionPhase>"
+        "<ReturnCode>000000</ReturnCode></mutable></header>"
+        "<body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
+    ).encode()
+    return sign_response(response, bank_keyring)
+
+
+def test_verify_response_signature_accepts_a_correctly_signed_response() -> None:
+    bank_keyring = keys.generate_keyring()
+    response = _signed_response(bank_keyring)
+    h005.verify_response_signature(response, bank_keyring.authentication.public_key())
+
+
+def test_verify_response_signature_rejects_the_wrong_key() -> None:
+    bank_keyring = keys.generate_keyring()
+    other = keys.generate_keyring()
+    with pytest.raises(ResponseAuthenticationError):
+        h005.verify_response_signature(
+            _signed_response(bank_keyring), other.authentication.public_key()
+        )
+
+
+def test_verify_response_signature_rejects_a_tampered_response() -> None:
+    bank_keyring = keys.generate_keyring()
+    tampered = _signed_response(bank_keyring).replace(
+        b"<TransactionPhase>Initialisation</TransactionPhase>",
+        b"<TransactionPhase>Transfer</TransactionPhase>",
+    )
+    with pytest.raises(ResponseAuthenticationError):
+        h005.verify_response_signature(tampered, bank_keyring.authentication.public_key())
+
+
+def test_verify_response_signature_rejects_an_unsigned_response() -> None:
+    bank_keyring = keys.generate_keyring()
+    unsigned = (
+        f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static/>'
+        "<mutable><ReturnCode>000000</ReturnCode></mutable></header>"
+        "<body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
+    ).encode()
+    with pytest.raises(ResponseAuthenticationError):
+        h005.verify_response_signature(unsigned, bank_keyring.authentication.public_key())
+
+
+def test_admin_download_request_carries_standard_order_params(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    bank_keyring = keys.generate_keyring()
+    request = h005.build_admin_download_initialisation_request(
+        bank, user, keyring, _bank_keys_from(bank_keyring), "HTD"
+    )
+    root = etree.fromstring(request)
+    assert root.findtext(f".//{{{_NS}}}AdminOrderType") == "HTD"
+    assert root.find(f".//{{{_NS}}}StandardOrderParams") is not None
+    assert root.find(f".//{{{_NS}}}BTDOrderParams") is None
+    assert crypto.verify_auth_signature(root, keyring.authentication.public_key())
+
+
+def test_parse_available_order_types_reads_an_empty_haa_response() -> None:
+    assert h005.parse_available_order_types(
+        f'<HAAResponseOrderData xmlns="{_NS}"/>'.encode()
+    ) == []
+
+
+def test_parse_available_order_types_reads_service_entries() -> None:
+    order_data = (
+        f'<HAAResponseOrderData xmlns="{_NS}">'
+        "<Service><ServiceName>EOP</ServiceName><Scope>CH</Scope>"
+        '<Container containerType="ZIP"/><MsgName version="08">camt.053</MsgName></Service>'
+        "<Service><ServiceName>PSR</ServiceName><Scope>CH</Scope>"
+        '<MsgName version="10">pain.002</MsgName></Service>'
+        "</HAAResponseOrderData>"
+    ).encode()
+    first, second = h005.parse_available_order_types(order_data)
+    assert first.service_name == "EOP"
+    assert first.container == "ZIP"
+    assert first.message_version == "08"
+    assert second.service_name == "PSR"
+    assert second.container is None
+
+
+def test_parse_subscriber_info_reads_the_real_htd_response() -> None:
+    order_data = (Path(__file__).parent / "data" / "htd_zkb_sample.xml").read_bytes()
+    info = h005.parse_subscriber_info(order_data)
+    assert info.user_id == "USER1"
+    assert info.name == "Test User"
+    assert len(info.permissions) == 42
+    assert len(info.order_types) == 42
+    # The registered pain.002 download BTF has no container — the fact that resolved 091005.
+    pain002_entries = [
+        entry.service
+        for entry in info.order_types
+        if entry.service is not None and entry.service.message_name == "pain.002"
+    ]
+    assert any(
+        service.message_version == "10" and service.container is None
+        for service in pain002_entries
+    )
+    # Upload entries carry the number of required signatures (0 on the test platform).
+    upload_entries = [entry for entry in info.order_types if entry.admin_order_type == "BTU"]
+    assert upload_entries
+    assert all(entry.number_of_signatures_required == 0 for entry in upload_entries)
 
 
 def test_parse_upload_initialisation_response_returns_the_transaction_id() -> None:

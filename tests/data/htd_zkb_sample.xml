@@ -1,0 +1,707 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<HTDResponseOrderData xmlns="urn:org:ebics:H005" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:org:ebics:H005 ebics_orders_H005.xsd">
+    <PartnerInfo>
+        <AddressInfo>
+            <Name>Test User</Name>
+            <Street>Teststrasse</Street>
+            <City>Teststadt</City>
+            <Country>CH</Country>
+        </AddressInfo>
+        <BankInfo>
+            <HostID>EBICSHOST</HostID>
+        </BankInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>EOP</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.053</MsgName>
+            </Service>
+            <Description>camt.053 ZIP (Version 08) - CH Kontoauszug</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>HAA</AdminOrderType>
+            <Description>Abrufbare Auftragsarten abholen</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>HKD</AdminOrderType>
+            <Description>Kunden- und Teilnehmerdaten abholen</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>HPB</AdminOrderType>
+            <Description>Public Keys der Bank abholen</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>HPD</AdminOrderType>
+            <Description>Bankparameter abholen</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>HTD</AdminOrderType>
+            <Description>Kunden- und Teilnehmerdaten abholen</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>PSR</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName version="10">pain.002</MsgName>
+            </Service>
+            <Description>pain.002 (Version 10) - CH Status Report</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 08) - CH Zusatzinfos zu Sammelbuchungen</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XABK</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 08) - CH Zusatzinfos zu Sammelbuchungen, nur Debit</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XDCI</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 08) - CH Buchungsinformationen</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XDDD</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 08) - CH Zusatzinfos zu Sammelbuchungen - DDD</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XISR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 08) - CH Zusatzinfos zu Sammelbuchungen - ESR</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XQRR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 08) - CH Zusatzinfos zu Sammelbuchungen - QRR</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XSCR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 08) - CH Zusatzinfos zu Sammelbuchungen - SCOR</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>STM</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.052</MsgName>
+            </Service>
+            <Description>camt.052 ZIP (Version 08) - CH untertägiger Kontoauszug</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>OTH</ServiceName>
+                <Scope>BIL</Scope>
+                <ServiceOption>CH004TPE</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName>msc</MsgName>
+            </Service>
+            <Description>ZIP-Archiv mit allen Ergebnisdateien</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>PSR</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="03">pain.002</MsgName>
+            </Service>
+            <Description>pain.002 (Version 03) - CH Status Report</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>PSR</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName>pain.002</MsgName>
+            </Service>
+            <Description>pain.002 (Version 03) - CH Status Report</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>STM</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.052</MsgName>
+            </Service>
+            <Description>camt.052 ZIP (Version 04) - CH untertägiger Kontoauszug</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>EOP</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.053</MsgName>
+            </Service>
+            <Description>camt.053 ZIP (Version 04) - CH Kontoauszug</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 04) - CH Zusatzinfos zu Sammelbuchungen</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XISR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 04) - CH Zusatzinfos zu Sammelbuchungen - ESR</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XQRR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 04) - CH Zusatzinfos zu Sammelbuchungen - QRR</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XSCR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 04) - CH Zusatzinfos zu Sammelbuchungen - SCOR</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XDCI</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 04) - CH Buchungsinformationen</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XDDD</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 04) - CH Zusatzinfos zu Sammelbuchungen - DDD</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XABK</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+            <Description>camt.054 ZIP (Version 04) - CH Zusatzinfos zu Sammelbuchungen, nur Debit</Description>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>SCT</ServiceName>
+                <MsgName version="03">pain.001</MsgName>
+            </Service>
+            <Description>pain.001 (Version 03) - SEPA Zahlungseinlieferung</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>HCA</AdminOrderType>
+            <Description>Teilnehmerschluessel EBICS aendern</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>HCS</AdminOrderType>
+            <Description>Teilnehmerschluessel EU und EBICS aendern</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>HIA</AdminOrderType>
+            <Description>Teilnehmerschluessel EBICS uebermitteln</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>INI</AdminOrderType>
+            <Description>Passwort-Initialisierung</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>MCT</ServiceName>
+                <Scope>CGI</Scope>
+                <ServiceOption>XCH</ServiceOption>
+                <MsgName version="09">pain.001</MsgName>
+            </Service>
+            <Description>pain.001 (Version 09) - CGI Zahlungseinlieferung CH Schema</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>MCT</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName version="09">pain.001</MsgName>
+            </Service>
+            <Description>pain.001 (Version 09) - CH Zahlungseinlieferung</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>PUB</AdminOrderType>
+            <Description>Public-Key senden</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>SCT</ServiceName>
+                <MsgName version="09">pain.001</MsgName>
+            </Service>
+            <Description>pain.001 (Version 09) - SEPA Zahlungseinlieferung</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>SPR</AdminOrderType>
+            <Description>Sperrung der Zugangsberechtigung</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>MCT</ServiceName>
+                <Scope>CGI</Scope>
+                <ServiceOption>XCH</ServiceOption>
+                <MsgName version="03">pain.001</MsgName>
+            </Service>
+            <Description>pain.001 (Version 03) - CGI Zahlungseinlieferung CH Schema</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>MCT</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName version="03">pain.001</MsgName>
+            </Service>
+            <Description>pain.001 (Version 03) - CH Zahlungseinlieferung</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>SDD</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName>pain.008</MsgName>
+            </Service>
+            <Description>SEPA CH Direct Debit Auftrag</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>SDD</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName version="02">pain.008</MsgName>
+            </Service>
+            <Description>SEPA CH Direct Debit Auftrag</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+        <OrderInfo>
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>OTH</ServiceName>
+                <Scope>BIL</Scope>
+                <ServiceOption>CH004TPS</ServiceOption>
+                <MsgName>csv</MsgName>
+            </Service>
+            <Description>CSV-Datei - Inputdatei für Simulation von camt-Meldungen</Description>
+            <NumSigRequired>0</NumSigRequired>
+        </OrderInfo>
+    </PartnerInfo>
+    <UserInfo>
+        <UserID Status="1">USER1</UserID>
+        <Name>Test User</Name>
+        <Permission>
+            <AdminOrderType>HAA</AdminOrderType>
+        </Permission>
+        <Permission>
+            <AdminOrderType>HKD</AdminOrderType>
+        </Permission>
+        <Permission>
+            <AdminOrderType>HPB</AdminOrderType>
+        </Permission>
+        <Permission>
+            <AdminOrderType>HPD</AdminOrderType>
+        </Permission>
+        <Permission>
+            <AdminOrderType>HTD</AdminOrderType>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>OTH</ServiceName>
+                <Scope>BIL</Scope>
+                <ServiceOption>CH004TPE</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName>msc</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>PSR</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="03">pain.002</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>PSR</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName>pain.002</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>STM</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.052</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>EOP</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.053</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XISR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XQRR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XSCR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XDCI</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XDDD</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XABK</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="04">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>EOP</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.053</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>PSR</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName version="10">pain.002</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XABK</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XDCI</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XDDD</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XISR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XQRR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>REP</ServiceName>
+                <Scope>CH</Scope>
+                <ServiceOption>XSCR</ServiceOption>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.054</MsgName>
+            </Service>
+        </Permission>
+        <Permission>
+            <AdminOrderType>BTD</AdminOrderType>
+            <Service>
+                <ServiceName>STM</ServiceName>
+                <Scope>CH</Scope>
+                <Container containerType="ZIP"/>
+                <MsgName version="08">camt.052</MsgName>
+            </Service>
+        </Permission>
+        <Permission AuthorisationLevel="E">
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>MCT</ServiceName>
+                <Scope>CGI</Scope>
+                <ServiceOption>XCH</ServiceOption>
+                <MsgName version="09">pain.001</MsgName>
+            </Service>
+        </Permission>
+        <Permission AuthorisationLevel="E">
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>MCT</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName version="09">pain.001</MsgName>
+            </Service>
+        </Permission>
+        <Permission AuthorisationLevel="E">
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>SCT</ServiceName>
+                <MsgName version="09">pain.001</MsgName>
+            </Service>
+        </Permission>
+        <Permission AuthorisationLevel="E">
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>SCT</ServiceName>
+                <MsgName version="03">pain.001</MsgName>
+            </Service>
+        </Permission>
+        <Permission AuthorisationLevel="E">
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>MCT</ServiceName>
+                <Scope>CGI</Scope>
+                <ServiceOption>XCH</ServiceOption>
+                <MsgName version="03">pain.001</MsgName>
+            </Service>
+        </Permission>
+        <Permission AuthorisationLevel="E">
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>MCT</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName version="03">pain.001</MsgName>
+            </Service>
+        </Permission>
+        <Permission AuthorisationLevel="E">
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>SDD</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName>pain.008</MsgName>
+            </Service>
+        </Permission>
+        <Permission AuthorisationLevel="E">
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>SDD</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName version="02">pain.008</MsgName>
+            </Service>
+        </Permission>
+        <Permission AuthorisationLevel="E">
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>OTH</ServiceName>
+                <Scope>BIL</Scope>
+                <ServiceOption>CH004TPS</ServiceOption>
+                <MsgName>csv</MsgName>
+            </Service>
+        </Permission>
+        <Permission AuthorisationLevel="T">
+            <AdminOrderType>HCA</AdminOrderType>
+        </Permission>
+        <Permission AuthorisationLevel="T">
+            <AdminOrderType>HCS</AdminOrderType>
+        </Permission>
+        <Permission AuthorisationLevel="T">
+            <AdminOrderType>HIA</AdminOrderType>
+        </Permission>
+        <Permission AuthorisationLevel="T">
+            <AdminOrderType>INI</AdminOrderType>
+        </Permission>
+        <Permission AuthorisationLevel="T">
+            <AdminOrderType>PUB</AdminOrderType>
+        </Permission>
+        <Permission AuthorisationLevel="T">
+            <AdminOrderType>SPR</AdminOrderType>
+        </Permission>
+    </UserInfo>
+</HTDResponseOrderData>

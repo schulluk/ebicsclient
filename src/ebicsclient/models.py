@@ -450,6 +450,50 @@ class PaymentStatusReport:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class OrderTypeInfo:
+    """One order type entry from the bank's subscriber data (HTD ``OrderInfo``/``Permission``).
+
+    Attributes:
+        admin_order_type: The administrative order type (``"BTD"``, ``"BTU"``, ``"HPB"``, …).
+        service: For ``BTD``/``BTU`` entries, the Business Transaction Format the entry
+            refers to; ``None`` for plain administrative order types.
+        description: The bank's human-readable description, or ``None`` (permissions
+            carry none).
+        number_of_signatures_required: How many electronic signatures the order type
+            requires (upload entries), or ``None`` if not stated.
+    """
+
+    admin_order_type: str
+    service: BusinessTransactionFormat | None
+    description: str | None
+    number_of_signatures_required: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberInfo:
+    """The bank's registered data for this subscriber (the HTD download).
+
+    The authoritative view of what the bank has configured: the order types offered to
+    the partner and the permissions granted to this user. Useful for diagnosing
+    ``091005``-style rejections — an order type missing here is not registered, whatever
+    a catalogue says.
+
+    Attributes:
+        user_id: The subscriber's User ID as registered at the bank.
+        user_status: The bank's user-status attribute (a bank-defined code), or ``None``.
+        name: The subscriber's registered name, or ``None``.
+        permissions: The order types this user may use, in document order.
+        order_types: Every order type registered for the partner, in document order.
+    """
+
+    user_id: str
+    user_status: str | None
+    name: str | None
+    permissions: tuple[OrderTypeInfo, ...]
+    order_types: tuple[OrderTypeInfo, ...]
+
+
 class OutputFormat(StrEnum):
     """The rendering format for the initialisation letter.
 

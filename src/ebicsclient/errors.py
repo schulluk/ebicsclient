@@ -125,6 +125,15 @@ class ProtocolError(EbicsError):
     """The bank's response violated the expected EBICS protocol or could not be parsed."""
 
 
+class ResponseAuthenticationError(ProtocolError):
+    """The bank's response failed authentication-signature verification.
+
+    Every ``ebicsResponse`` carries the bank's ``AuthSignature`` (X002) over its
+    ``authenticate="true"`` nodes. A missing or invalid signature means the response
+    cannot be attributed to the bank — do not trust its contents. Fail closed.
+    """
+
+
 class BankKeyMismatchError(ProtocolError):
     """The bank's HPB public keys did not match the pinned values.
 

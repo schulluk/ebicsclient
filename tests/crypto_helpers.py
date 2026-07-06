@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.x509.oid import NameOID
 from lxml import etree
 
+from ebicsclient import crypto
 from ebicsclient import keys as _keys
 from ebicsclient.keys import CertificateUsage, generate_self_signed_certificate
 from ebicsclient.models import Keyring
@@ -95,18 +96,34 @@ def encrypt_order_data(
     return transaction_key, encrypted
 
 
+def sign_response(response: bytes, bank_keyring: Keyring) -> bytes:
+    """Sign a response fixture with the bank's X002 key, the way a real bank does.
+
+    Inserts the ``AuthSignature`` over the fixture's ``authenticate="true"`` nodes in
+    schema order (header, AuthSignature, body), so client-side response verification
+    accepts it.
+    """
+    root = etree.fromstring(response)
+    root.insert(
+        1, crypto.build_auth_signature(root, bank_keyring.authentication, h005.NAMESPACE)
+    )
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
+
+
 def make_download_responses(
     subscriber_keyring: Keyring,
     order_data: bytes,
     *,
+    bank_keyring: Keyring,
     num_segments: int = 1,
     transaction_id: str = "A" * 32,
 ) -> list[bytes]:
-    """Build the response sequence for a full download of ``order_data``.
+    """Build the signed response sequence for a full download of ``order_data``.
 
     Encrypts ``order_data`` the way a bank would, splits the base64 stream into
-    ``num_segments`` pieces, and returns ``[initialisation, transfer..., receipt]`` — the
-    responses a fake transport should hand back in order to exercise ``Client.download``.
+    ``num_segments`` pieces, signs every response with the bank's X002 key, and returns
+    ``[initialisation, transfer..., receipt]`` — the responses a fake transport should
+    hand back in order to exercise ``Client.download``.
     """
     transaction_key, encrypted = encrypt_order_data(
         subscriber_keyring.encryption.public_key(), order_data
@@ -136,7 +153,7 @@ def make_download_responses(
             )
         )
     responses.append(_receipt_response())
-    return responses
+    return [sign_response(response, bank_keyring) for response in responses]
 
 
 def _split(stream: str, parts: int) -> list[str]:

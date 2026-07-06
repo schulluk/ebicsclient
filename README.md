@@ -122,8 +122,8 @@ a real bank statement.
 
 **Milestone 6 — Protocol hardening & conveniences**
 
-- [ ] Verify the bank's `AuthSignature` on responses (protocol-level response authentication)
-- [ ] Subscriber self-inspection — available order types (HAA) and subscriber info (HTD)
+- [x] Verify the bank's `AuthSignature` on every response — validated live on ZKB
+- [x] Subscriber self-inspection — `available_order_types()` (HAA) and `subscriber_info()` (HTD)
 - [ ] Distributed signatures (EDS) — parked until a validatable multi-signature setup exists
 
 This client is **EBICS 3.0 (H005) only** — legacy versions (H004 and earlier) will not be

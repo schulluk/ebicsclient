@@ -28,7 +28,13 @@ from ebicsclient.certificates import (
     BankCertificateVerifier,
     CertificateProvider,
 )
-from ebicsclient.errors import ProtocolError, ReturnCodeError, UnknownReturnCodeError
+from ebicsclient.errors import (
+    CryptoError,
+    ProtocolError,
+    ResponseAuthenticationError,
+    ReturnCodeError,
+    UnknownReturnCodeError,
+)
 from ebicsclient.models import (
     Bank,
     BankKeys,
@@ -36,6 +42,8 @@ from ebicsclient.models import (
     DownloadInitialisation,
     DownloadSegment,
     Keyring,
+    OrderTypeInfo,
+    SubscriberInfo,
     UploadPayload,
     User,
 )
@@ -234,6 +242,139 @@ def parse_hpb_response(
     )
 
 
+def parse_available_order_types(order_data: bytes) -> list[BusinessTransactionFormat]:
+    """Parse an HAA response's order data into the order types with data available.
+
+    Args:
+        order_data: The decrypted ``HAAResponseOrderData`` XML bytes.
+
+    Returns:
+        The Business Transaction Formats for which the bank currently holds data,
+        in document order (empty when nothing is waiting).
+
+    Raises:
+        ProtocolError: the order data could not be parsed or is not an HAA response.
+    """
+    root = _parse(order_data)
+    if etree.QName(root).localname != "HAAResponseOrderData":
+        raise ProtocolError(
+            f"Expected <HAAResponseOrderData>, got <{etree.QName(root).localname}>"
+        )
+    return [
+        _business_transaction_format(service)
+        for service in root.findall(f"{{{NAMESPACE}}}Service")
+    ]
+
+
+def parse_subscriber_info(order_data: bytes) -> SubscriberInfo:
+    """Parse an HTD response's order data into the bank's registered subscriber data.
+
+    Args:
+        order_data: The decrypted ``HTDResponseOrderData`` XML bytes.
+
+    Returns:
+        The subscriber's registered user data, permissions, and the partner's order types.
+
+    Raises:
+        ProtocolError: the order data could not be parsed or is not an HTD response.
+    """
+    root = _parse(order_data)
+    if etree.QName(root).localname != "HTDResponseOrderData":
+        raise ProtocolError(
+            f"Expected <HTDResponseOrderData>, got <{etree.QName(root).localname}>"
+        )
+    user_info = root.find(f"{{{NAMESPACE}}}UserInfo")
+    if user_info is None:
+        raise ProtocolError("HTD response is missing <UserInfo>")
+    user_id = user_info.find(f"{{{NAMESPACE}}}UserID")
+    if user_id is None or user_id.text is None:
+        raise ProtocolError("HTD response is missing <UserID>")
+    name = user_info.findtext(f"{{{NAMESPACE}}}Name")
+    permissions = tuple(
+        _order_type_info(permission)
+        for permission in user_info.findall(f"{{{NAMESPACE}}}Permission")
+    )
+    order_types = tuple(
+        _order_type_info(order_info)
+        for order_info in root.findall(
+            f"{{{NAMESPACE}}}PartnerInfo/{{{NAMESPACE}}}OrderInfo"
+        )
+    )
+    return SubscriberInfo(
+        user_id=user_id.text,
+        user_status=user_id.get("Status"),
+        name=name,
+        permissions=permissions,
+        order_types=order_types,
+    )
+
+
+def _order_type_info(element: etree._Element) -> OrderTypeInfo:
+    admin_order_type = element.findtext(f"{{{NAMESPACE}}}AdminOrderType")
+    if admin_order_type is None:
+        raise ProtocolError("HTD entry is missing <AdminOrderType>")
+    service = element.find(f"{{{NAMESPACE}}}Service")
+    signatures = element.findtext(f"{{{NAMESPACE}}}NumSigRequired")
+    return OrderTypeInfo(
+        admin_order_type=admin_order_type,
+        service=_business_transaction_format(service) if service is not None else None,
+        description=element.findtext(f"{{{NAMESPACE}}}Description"),
+        number_of_signatures_required=_int(signatures, "NumSigRequired")
+        if signatures is not None
+        else None,
+    )
+
+
+def _business_transaction_format(service: etree._Element) -> BusinessTransactionFormat:
+    service_name = service.findtext(f"{{{NAMESPACE}}}ServiceName")
+    message = service.find(f"{{{NAMESPACE}}}MsgName")
+    if service_name is None or message is None or message.text is None:
+        raise ProtocolError("A <Service> entry is missing its ServiceName or MsgName")
+    container = service.find(f"{{{NAMESPACE}}}Container")
+    return BusinessTransactionFormat(
+        service_name=service_name,
+        message_name=message.text,
+        scope=service.findtext(f"{{{NAMESPACE}}}Scope"),
+        message_version=message.get("version"),
+        container=container.get("containerType") if container is not None else None,
+        service_option=service.findtext(f"{{{NAMESPACE}}}ServiceOption"),
+    )
+
+
+def verify_response_signature(
+    response: bytes, authentication_key: rsa.RSAPublicKey
+) -> None:
+    """Verify the bank's ``AuthSignature`` on an ``ebicsResponse``.
+
+    Every transaction response (download and upload phases) is signed by the bank's X002
+    key over its ``authenticate="true"`` nodes; verifying it attributes the response to
+    the bank at the protocol level, independent of TLS. Key-management responses
+    (INI/HIA/HPB) carry no ``AuthSignature`` by design and must not be passed here —
+    their protection is the out-of-band verification of the delivered key hashes.
+
+    Args:
+        response: The raw ``ebicsResponse`` bytes from the bank.
+        authentication_key: The bank's X002 public key (from HPB, hash-verified/pinned).
+
+    Raises:
+        ProtocolError: the response could not be parsed as XML.
+        ResponseAuthenticationError: the signature is missing or invalid — the response
+            cannot be attributed to the bank and must not be trusted.
+    """
+    root = _parse(response)
+    try:
+        valid = crypto.verify_auth_signature(root, authentication_key)
+    except CryptoError as error:
+        # No authenticate="true" nodes to digest — structurally not a signed response.
+        raise ResponseAuthenticationError(
+            "The bank's response carries nothing to authenticate — do not trust it"
+        ) from error
+    if not valid:
+        raise ResponseAuthenticationError(
+            "The bank's response AuthSignature is missing or invalid — do not trust it"
+        )
+
+
 def parse_download_initialisation_response(response: bytes) -> DownloadInitialisation:
     """Parse a download-initialisation response into its transaction handle and first segment.
 
@@ -314,6 +455,47 @@ def build_download_initialisation_request(
     Returns:
         The serialised, signed ``ebicsRequest`` XML.
     """
+    return _download_initialisation_request(
+        bank, user, keyring, bank_keys, _ADMIN_ORDER_TYPE_BTD, btf
+    )
+
+
+def build_admin_download_initialisation_request(
+    bank: Bank,
+    user: User,
+    keyring: Keyring,
+    bank_keys: BankKeys,
+    admin_order_type: str,
+) -> bytes:
+    """Build the signed download-initialisation request for an administrative order type.
+
+    Administrative downloads (e.g. ``HAA`` — order types with data available, ``HTD`` —
+    subscriber information) use the same three-phase download transaction as ``BTD``,
+    but carry the admin order type with empty ``StandardOrderParams`` instead of a BTF.
+
+    Args:
+        bank: The target bank.
+        user: The subscriber.
+        keyring: The subscriber's key pairs (the X002 key signs the request).
+        bank_keys: The bank's public keys (from HPB), digested into the request.
+        admin_order_type: The administrative order type (e.g. ``"HAA"``, ``"HTD"``).
+
+    Returns:
+        The serialised, signed ``ebicsRequest`` XML.
+    """
+    return _download_initialisation_request(
+        bank, user, keyring, bank_keys, admin_order_type, None
+    )
+
+
+def _download_initialisation_request(
+    bank: Bank,
+    user: User,
+    keyring: Keyring,
+    bank_keys: BankKeys,
+    admin_order_type: str,
+    btf: BusinessTransactionFormat | None,
+) -> bytes:
     root = etree.Element(etree.QName(NAMESPACE, "ebicsRequest"), nsmap=_NSMAP)
     root.set("Version", _PROTOCOL_VERSION)
     root.set("Revision", _REVISION)
@@ -327,8 +509,11 @@ def build_download_initialisation_request(
     _text(static, "PartnerID", user.partner_id)
     _text(static, "UserID", user.user_id)
     order_details = etree.SubElement(static, etree.QName(NAMESPACE, "OrderDetails"))
-    _text(order_details, "AdminOrderType", _ADMIN_ORDER_TYPE_BTD)
-    _append_btd_order_params(order_details, btf)
+    _text(order_details, "AdminOrderType", admin_order_type)
+    if btf is not None:
+        _append_btd_order_params(order_details, btf)
+    else:
+        etree.SubElement(order_details, etree.QName(NAMESPACE, "StandardOrderParams"))
     _append_bank_pub_key_digests(static, bank_keys)
     _text(static, "SecurityMedium", _SECURITY_MEDIUM)
 
