@@ -46,7 +46,9 @@ from ebicsclient.keys import (
     serialize_keyring,
 )
 from ebicsclient.models import (
+    CAMT_052,
     CAMT_053,
+    CAMT_054,
     PAIN_001,
     PAIN_002,
     Balance,
@@ -59,6 +61,7 @@ from ebicsclient.models import (
     InitializationState,
     Keyring,
     Letter,
+    Notification,
     OutputFormat,
     PaymentStatus,
     PaymentStatusReport,
@@ -80,7 +83,9 @@ except PackageNotFoundError:  # running from a source tree without an install
     __version__ = "0.0.0"
 
 __all__ = [
+    "CAMT_052",
     "CAMT_053",
+    "CAMT_054",
     "PAIN_001",
     "PAIN_002",
     "Balance",
@@ -109,6 +114,7 @@ __all__ = [
     "MappingCertificateProvider",
     "MessageFormatError",
     "MissingDependencyError",
+    "Notification",
     "OutputFormat",
     "PaymentStatus",
     "PaymentStatusReport",

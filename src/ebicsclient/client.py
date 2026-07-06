@@ -15,9 +15,11 @@ from ebicsclient.certificates import (
     CertificateProvider,
 )
 from ebicsclient.errors import BankKeyMismatchError, ClientStateError, ReturnCodeError
-from ebicsclient.formats import camt053, pain002
+from ebicsclient.formats import camt052, camt053, camt054, pain002
 from ebicsclient.models import (
+    CAMT_052,
     CAMT_053,
+    CAMT_054,
     PAIN_002,
     Bank,
     BankKeyHashes,
@@ -26,6 +28,7 @@ from ebicsclient.models import (
     InitializationState,
     Keyring,
     Letter,
+    Notification,
     OutputFormat,
     PaymentStatusReport,
     Statement,
@@ -297,6 +300,53 @@ class Client:
             MessageFormatError: the downloaded camt.053 data could not be parsed.
         """
         return camt053.parse(self.download(CAMT_053))
+
+    def download_intraday_statements(self) -> list[Statement]:
+        """Download the intraday camt.052 account reports and parse them.
+
+        A convenience over :meth:`download` for ``STM/camt.052``. Intraday reports share
+        the statement shape; interim balances (if any) are in ``balances`` rather than
+        ``opening_balance``/``closing_balance``. The bank's keys must already be available
+        (call :meth:`hpb` first).
+
+        Returns:
+            The intraday reports the bank delivered, in document order.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
+            CryptoError: the order data could not be decrypted.
+            MessageFormatError: the downloaded camt.052 data could not be parsed.
+        """
+        return camt052.parse(self.download(CAMT_052))
+
+    def download_booking_advices(
+        self, btf: BusinessTransactionFormat = CAMT_054
+    ) -> list[Notification]:
+        """Download camt.054 debit/credit notifications (booking advices) and parse them.
+
+        A convenience over :meth:`download` for ``REP/camt.054``. Pass a variant BTF (the
+        same tuple with a ``service_option`` such as ``"XQRR"``/``"XSCR"``) for the Swiss
+        collective-resolution advices. The bank's keys must already be available (call
+        :meth:`hpb` first).
+
+        Args:
+            btf: The camt.054 Business Transaction Format; defaults to the plain ``CAMT_054``.
+
+        Returns:
+            The notifications the bank delivered, in document order.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
+            CryptoError: the order data could not be decrypted.
+            MessageFormatError: the downloaded camt.054 data could not be parsed.
+        """
+        return camt054.parse(self.download(btf))
 
     def download_payment_status_reports(self) -> list[PaymentStatusReport]:
         """Download the pain.002 payment status reports and parse them.

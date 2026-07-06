@@ -114,11 +114,11 @@ a real bank statement.
 - [x] Golden regression fixture from a real ZKB statement
 - [x] CI (ruff / mypy --strict / pytest) and tag-triggered PyPI releases (Trusted Publishing)
 
-**Milestone 5 — Message formats** (next)
+**Milestone 5 — Message formats** (parsers built against genuine ZKB messages)
 
-- [ ] pain.002 status-report parser (accepted / rejected transactions)
-- [ ] camt.052 intraday statements
-- [ ] camt.054 booking advices (QRR / SCOR / LSV)
+- [x] pain.002 status-report parser (group / payment / transaction statuses, reason codes)
+- [x] camt.052 intraday reports
+- [x] camt.054 booking advices (incl. the QRR / SCOR / LSV variants via `service_option`)
 
 **Milestone 6 — Protocol conveniences & breadth**
 

@@ -139,6 +139,28 @@ CAMT_053 = BusinessTransactionFormat(
     container="ZIP",
 )
 
+#: The Swiss camt.052.001.08 intraday account report download (the ZKB ``Z52`` order type,
+#: ``STM / CH / camt.052 / 08 / ZIP``); confirmed against the bank's HTD registry.
+CAMT_052 = BusinessTransactionFormat(
+    service_name="STM",
+    message_name="camt.052",
+    scope="CH",
+    message_version="08",
+    container="ZIP",
+)
+
+#: The Swiss camt.054.001.08 debit/credit notification download (the ZKB ``Z54`` order type,
+#: ``REP / CH / camt.054 / 08 / ZIP``); confirmed against the bank's HTD registry. The
+#: QRR/SCOR/LSV collective-resolution variants use the same tuple with a ``service_option``
+#: (``XQRR``/``XSCR``/…, see docs/10-btf-order-types.md).
+CAMT_054 = BusinessTransactionFormat(
+    service_name="REP",
+    message_name="camt.054",
+    scope="CH",
+    message_version="08",
+    container="ZIP",
+)
+
 #: The Swiss pain.001.001.09 payment-submission upload (no container). Matches the ZKB ``XE2``
 #: order type (``MCT / CH / pain.001 / 09``); see docs/10-btf-order-types.md.
 PAIN_001 = BusinessTransactionFormat(
@@ -315,6 +337,21 @@ class UploadPayload:
     def num_segments(self) -> int:
         """The number of order-data segments (the request's NumSegments)."""
         return len(self.order_data_segments)
+
+
+@dataclass(frozen=True, slots=True)
+class Notification:
+    """A camt.054 debit/credit notification (booking advice).
+
+    Attributes:
+        identification: The notification identification assigned by the bank.
+        iban: The account IBAN, or ``None`` if the notification carried another account id.
+        entries: The booking entries the notification reports, in document order.
+    """
+
+    identification: str
+    iban: str | None
+    entries: tuple[Entry, ...]
 
 
 #: ISO external status code: the file passed technical validation (syntax/schema).
