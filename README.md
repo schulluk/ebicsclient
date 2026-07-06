@@ -86,22 +86,45 @@ download path, and the payment upload (envelope, authentication signature, A006 
 and order-data encryption) are all accepted by the bank, and the camt.053 parser is validated against
 a real bank statement.
 
+**Milestone 1 — Key ceremony** (validated live on ZKB)
+
 - [x] Key generation + encrypted keyring, and EBICS public-key hashes
-- [x] Exception model with retryability classification
 - [x] Authentication signature (inclusive Canonical XML 1.0 + RSA-SHA256)
 - [x] HTTPS transport (TLS 1.2 floor, certifi fallback via the optional `tls` extra)
-- [x] INI/HIA/HPB handshake — validated live on ZKB
+- [x] INI/HIA/HPB handshake
 - [x] X.509 key transmission: **mit Schlüsseln** (self-signed) and **mit Zertifikaten** (CA certs)
 - [x] Initialisation letter (HTML, or PDF via the optional `pdf` extra)
+- [x] Bank-key pinning across sessions (`hpb(pinned=...)`)
+
+**Milestone 2 — Read** (validated live on ZKB)
+
 - [x] Order-data decryption (RSA-unwrap + AES-128-CBC)
 - [x] Statement download — `EOP/camt.053` BTD transaction (initialise → transfer → receipt)
 - [x] camt.053 parsing (balances + entries) — validated on a real ZKB statement
-- [x] Payment upload — `MCT/pain.001` BTU transaction with the A006 electronic signature — accepted live
-- [x] Offline verification: H005 XSD validation, C14N golden vectors, ebics-client-php parity
 
-Not yet built (deliberately out of the current scope): a pain.002 status-report parser, camt.052 /
-camt.054 reporting, distributed signatures (EDS), and non-H005 EBICS versions — the `protocol/` and
-`formats/` seams are in place for these.
+**Milestone 3 — Write** (validated live on ZKB)
+
+- [x] Order-data encryption and the A006 electronic signature (RSASSA-PSS)
+- [x] Payment upload — `MCT/pain.001` BTU transaction — accepted live
+
+**Milestone 4 — Verification & release**
+
+- [x] Exception model with retryability classification
+- [x] Offline verification: H005 XSD validation, C14N golden vectors, ebics-client-php parity
+- [x] Golden regression fixture from a real ZKB statement
+- [x] CI (ruff / mypy --strict / pytest) and tag-triggered PyPI releases (Trusted Publishing)
+
+**Milestone 5 — Message formats** (next)
+
+- [ ] pain.002 status-report parser (accepted / rejected transactions)
+- [ ] camt.052 intraday statements
+- [ ] camt.054 booking advices (QRR / SCOR / LSV)
+
+**Milestone 6 — Protocol conveniences & breadth**
+
+- [ ] Subscriber self-inspection — available order types (HAA) and subscriber info (HTD)
+- [ ] Distributed signatures (EDS)
+- [ ] Further EBICS versions (e.g. H004) via the `protocol/` seam
 
 ## License
 
