@@ -78,10 +78,13 @@ MVP = read **and** write, validated live against ZKB: key init (INI/HIA/HPB) →
 `EOP/camt.053.001.08` and parse balances → upload `MCT/pain.001.001.09` with the A006 electronic
 signature. All of this is built and bank-accepted.
 
+The pain.002/camt.052/camt.054 parsers are built (M5, validated on genuine ZKB messages).
 Still deliberately **out of scope** — do not build until there is a concrete need and a way to
-validate it: distributed signatures (EDS), a pain.002 status-report parser, camt.052/camt.054
-reporting, non-H005 EBICS versions, and multi-bank quirk handling. The `protocol/` and `formats/`
-seams exist for these. Scope creep is what turns a stable standard into a maintenance burden.
+validate it: distributed signatures (EDS — the ZKB test subscriber has ``NumSigRequired=0``, so
+EDS cannot be validated there) and multi-bank quirk handling. **H004 and earlier EBICS versions
+will never be supported** (owner decision; see docs/04) — the `protocol/` seam exists for a
+future EBICS version, not for the past. Scope creep is what turns a stable standard into a
+maintenance burden.
 
 ## Workflow
 

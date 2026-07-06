@@ -120,11 +120,15 @@ a real bank statement.
 - [x] camt.052 intraday reports
 - [x] camt.054 booking advices (incl. the QRR / SCOR / LSV variants via `service_option`)
 
-**Milestone 6 — Protocol conveniences & breadth**
+**Milestone 6 — Protocol hardening & conveniences**
 
+- [ ] Verify the bank's `AuthSignature` on responses (protocol-level response authentication)
 - [ ] Subscriber self-inspection — available order types (HAA) and subscriber info (HTD)
-- [ ] Distributed signatures (EDS)
-- [ ] Further EBICS versions (e.g. H004) via the `protocol/` seam
+- [ ] Distributed signatures (EDS) — parked until a validatable multi-signature setup exists
+
+This client is **EBICS 3.0 (H005) only** — legacy versions (H004 and earlier) will not be
+supported (see [docs/04](docs/04-implementation-plan.md)); the `protocol/` seam exists for a
+future EBICS version, not for the past.
 
 ## License
 
