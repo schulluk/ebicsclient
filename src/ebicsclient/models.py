@@ -317,6 +317,102 @@ class UploadPayload:
         return len(self.order_data_segments)
 
 
+#: ISO external status code: the file passed technical validation (syntax/schema).
+STATUS_ACCEPTED_TECHNICAL = "ACTC"
+#: ISO external status code: the payment or file was accepted for processing.
+STATUS_ACCEPTED = "ACCP"
+#: ISO external status code: some transactions were accepted, others rejected.
+STATUS_PARTIALLY_ACCEPTED = "PART"
+#: ISO external status code: the transaction, payment, or file was rejected.
+STATUS_REJECTED = "RJCT"
+
+
+@dataclass(frozen=True, slots=True)
+class StatusReason:
+    """One reason attached to a pain.002 status (``StsRsnInf``).
+
+    Attributes:
+        code: The ISO external status-reason code (e.g. ``"AC01"`` invalid account number,
+            ``"RC05"`` invalid BIC), or ``None`` if the report gave only free text.
+        additional_information: Free-text detail from the bank, or ``None``.
+    """
+
+    code: str | None
+    additional_information: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TransactionStatus:
+    """The status of one original transaction in a pain.002 report (``TxInfAndSts``).
+
+    Attributes:
+        status: The ISO transaction status (e.g. ``"RJCT"``; see the ``STATUS_*`` constants).
+            ``None`` if the report omitted it.
+        original_instruction_id: The ``InstrId`` of the original transaction, or ``None``.
+        original_end_to_end_id: The ``EndToEndId`` of the original transaction, or ``None``.
+        reasons: The status reasons, in document order (usually one; empty when accepted).
+    """
+
+    status: str | None
+    original_instruction_id: str | None
+    original_end_to_end_id: str | None
+    reasons: tuple[StatusReason, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentStatus:
+    """The status of one original payment block in a pain.002 report (``OrgnlPmtInfAndSts``).
+
+    Attributes:
+        original_payment_information_id: The ``PmtInfId`` of the original payment block.
+        status: The ISO payment status (``PmtInfSts``), or ``None`` if omitted.
+        reasons: Payment-level status reasons, in document order.
+        transactions: Per-transaction statuses, in document order (may be empty — banks
+            often report only the exceptions).
+    """
+
+    original_payment_information_id: str
+    status: str | None
+    reasons: tuple[StatusReason, ...]
+    transactions: tuple[TransactionStatus, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentStatusReport:
+    """A pain.002 customer payment status report (``CstmrPmtStsRpt``).
+
+    The bank's verdict on a previously submitted pain.001: a group status for the whole
+    file, and — where relevant — per-payment and per-transaction statuses with reasons.
+
+    Attributes:
+        identification: The report's own message ID (``GrpHdr/MsgId``).
+        original_message_id: The ``MsgId`` of the pain.001 this report answers.
+        original_message_name: The original message name (e.g.
+            ``"pain.001.001.09.ch.03"``), or ``None`` if omitted.
+        group_status: The ISO group status (e.g. ``"ACTC"``, ``"ACCP"``, ``"PART"``,
+            ``"RJCT"``; see the ``STATUS_*`` constants), or ``None`` if omitted.
+        reasons: Group-level status reasons, in document order.
+        payments: Per-payment statuses, in document order.
+    """
+
+    identification: str
+    original_message_id: str
+    original_message_name: str | None
+    group_status: str | None
+    reasons: tuple[StatusReason, ...]
+    payments: tuple[PaymentStatus, ...]
+
+    @property
+    def rejected_transactions(self) -> tuple[TransactionStatus, ...]:
+        """Every transaction reported with status ``RJCT``, across all payment blocks."""
+        return tuple(
+            transaction
+            for payment in self.payments
+            for transaction in payment.transactions
+            if transaction.status == STATUS_REJECTED
+        )
+
+
 class OutputFormat(StrEnum):
     """The rendering format for the initialisation letter.
 

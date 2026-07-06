@@ -12,17 +12,15 @@ bank sending a different minor version is still parsed without a code change.
 """
 
 import datetime
-import io
-import zipfile
 from decimal import Decimal, InvalidOperation
 
 from lxml import etree
 
 from ebicsclient.errors import MessageFormatError
+from ebicsclient.formats.container import extract_documents
 from ebicsclient.models import Balance, CreditDebit, Entry, Statement
 
 _DOCUMENT = "Document"
-_ZIP_MAGIC = b"PK\x03\x04"
 # Closing/opening booked balances are selected by their ISO external balance-type code.
 _CLOSING_BOOKED = "CLBD"
 _OPENING_BOOKED = "OPBD"
@@ -42,20 +40,9 @@ def parse(order_data: bytes) -> list[Statement]:
         MessageFormatError: the data is not a readable camt.053 document or container.
     """
     statements: list[Statement] = []
-    for document in _documents(order_data):
+    for document in extract_documents(order_data):
         statements.extend(_parse_document(document))
     return statements
-
-
-def _documents(order_data: bytes) -> list[bytes]:
-    if not order_data.startswith(_ZIP_MAGIC):
-        return [order_data]
-    try:
-        with zipfile.ZipFile(io.BytesIO(order_data)) as archive:
-            # Sort by name so multi-file archives parse in a stable, reproducible order.
-            return [archive.read(name) for name in sorted(archive.namelist())]
-    except (zipfile.BadZipFile, OSError) as error:
-        raise MessageFormatError("Order data is not a readable ZIP container") from error
 
 
 def _parse_document(document: bytes) -> list[Statement]:

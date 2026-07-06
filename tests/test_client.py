@@ -3,6 +3,7 @@
 import io
 import zipfile
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from lxml import etree
@@ -204,6 +205,20 @@ def _upload_response(phase: str, *, transaction_id: str | None = None) -> bytes:
         "<ReturnCode>000000</ReturnCode></mutable></header>"
         "<body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
     ).encode()
+
+
+def test_download_payment_status_reports_parses_a_pain002_zip(keyring: Keyring) -> None:
+    document = (Path(__file__).parent / "data" / "pain002_part.xml").read_bytes()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("report.xml", document)
+    responses = make_download_responses(keyring, buffer.getvalue(), num_segments=1)
+    client, transport = _download_client(responses, keyring, _bank_keys(keys.generate_keyring()))
+    (report,) = client.download_payment_status_reports()
+    assert report.group_status == "PART"
+    assert len(report.rejected_transactions) == 2
+    opened = etree.fromstring(transport.posts[0])
+    assert opened.findtext(f".//{{{_NS}}}ServiceName") == "PSR"
 
 
 def test_upload_requires_hpb_first(keyring: Keyring) -> None:

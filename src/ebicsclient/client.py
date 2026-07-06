@@ -15,9 +15,10 @@ from ebicsclient.certificates import (
     CertificateProvider,
 )
 from ebicsclient.errors import BankKeyMismatchError, ClientStateError, ReturnCodeError
-from ebicsclient.formats import camt053
+from ebicsclient.formats import camt053, pain002
 from ebicsclient.models import (
     CAMT_053,
+    PAIN_002,
     Bank,
     BankKeyHashes,
     BankKeys,
@@ -26,6 +27,7 @@ from ebicsclient.models import (
     Keyring,
     Letter,
     OutputFormat,
+    PaymentStatusReport,
     Statement,
     User,
 )
@@ -295,6 +297,27 @@ class Client:
             MessageFormatError: the downloaded camt.053 data could not be parsed.
         """
         return camt053.parse(self.download(CAMT_053))
+
+    def download_payment_status_reports(self) -> list[PaymentStatusReport]:
+        """Download the pain.002 payment status reports and parse them.
+
+        A convenience over :meth:`download` for the common case: it fetches
+        ``PSR/pain.002`` and returns the parsed reports — the bank's verdicts on
+        previously uploaded pain.001 files, including per-transaction rejections.
+        The bank's keys must already be available (call :meth:`hpb` first).
+
+        Returns:
+            The payment status reports the bank delivered, in document order.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
+            CryptoError: the order data could not be decrypted.
+            MessageFormatError: the downloaded pain.002 data could not be parsed.
+        """
+        return pain002.parse(self.download(PAIN_002))
 
     def upload(self, btf: BusinessTransactionFormat, order_data: bytes) -> str:
         """Upload order data for a Business Transaction Format and return the transaction ID.

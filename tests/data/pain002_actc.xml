@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.002.001.10"><CstmrPmtStsRpt><GrpHdr><MsgId>3945731AGHG095204224712</MsgId><CreDtTm>2026-07-06T07:52:04.224Z</CreDtTm><InitgPty><Id><OrgId><AnyBIC>ZKBKCHZZ</AnyBIC></OrgId></Id></InitgPty></GrpHdr><OrgnlGrpInfAndSts><OrgnlMsgId>EBICSCLIENT-TEST-0004</OrgnlMsgId><OrgnlMsgNmId>pain.001.001.09.ch.03</OrgnlMsgNmId><GrpSts>ACTC</GrpSts></OrgnlGrpInfAndSts></CstmrPmtStsRpt></Document>
