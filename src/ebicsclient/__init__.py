@@ -33,6 +33,7 @@ from ebicsclient.errors import (
     Retryability,
     ReturnCodeError,
     TransportError,
+    UnknownReturnCodeError,
 )
 from ebicsclient.keys import (
     CertificateUsage,
@@ -127,6 +128,7 @@ __all__ = [
     "TransactionStatus",
     "TransportError",
     "TrustAnchorVerifier",
+    "UnknownReturnCodeError",
     "UploadPayload",
     "User",
     "__version__",

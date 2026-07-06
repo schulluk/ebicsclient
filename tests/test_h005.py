@@ -16,7 +16,12 @@ from lxml import etree
 from crypto_helpers import issue_certificate, make_ca, make_hpb_response
 from ebicsclient import crypto, keys
 from ebicsclient.certificates import MappingCertificateProvider, TrustAnchorVerifier
-from ebicsclient.errors import BankCertificateError, ProtocolError, ReturnCodeError
+from ebicsclient.errors import (
+    BankCertificateError,
+    ProtocolError,
+    ReturnCodeError,
+    UnknownReturnCodeError,
+)
 from ebicsclient.keys import CertificateUsage
 from ebicsclient.models import PAIN_001, Bank, BankKeys, Keyring, User
 from ebicsclient.protocol import h005
@@ -348,12 +353,57 @@ def test_parse_download_receipt_response_accepts_plain_ok() -> None:
     h005.parse_download_receipt_response(_receipt_response("000000", "[EBICS_OK] OK"))
 
 
-def test_parse_download_receipt_response_raises_on_a_genuine_error() -> None:
+def test_parse_download_receipt_response_raises_on_a_known_error() -> None:
     with pytest.raises(ReturnCodeError) as caught:
         h005.parse_download_receipt_response(
-            _receipt_response("091010", "[EBICS_TX_UNKNOWN_TXID] Transaction unknown")
+            _receipt_response("061099", "[EBICS_INTERNAL_ERROR] Internal error")
         )
+    assert caught.value.code == "061099"
+    assert not isinstance(caught.value, UnknownReturnCodeError)
+
+
+def test_parse_download_receipt_response_labels_an_unknown_code_as_unknown() -> None:
+    # 091010 is not in the client's verified return-code table: still a failure (never
+    # fail open), but explicitly labelled unverified rather than masked as a known one.
+    with pytest.raises(UnknownReturnCodeError) as caught:
+        h005.parse_download_receipt_response(_receipt_response("091010", "whatever the bank says"))
     assert caught.value.code == "091010"
+    assert "Unknown EBICS return code" in str(caught.value)
+
+
+def test_check_return_code_labels_an_unknown_code_as_unknown() -> None:
+    response = (
+        f'<ebicsResponse xmlns="{_NS}"><header><mutable>'
+        "<ReturnCode>424242</ReturnCode></mutable></header>"
+        "<body><ReturnCode>424242</ReturnCode></body></ebicsResponse>"
+    ).encode()
+    with pytest.raises(UnknownReturnCodeError) as caught:
+        h005.raise_for_return_code(response)
+    assert caught.value.code == "424242"
+
+
+def test_check_return_code_names_a_known_failure_without_report_text() -> None:
+    response = (
+        f'<ebicsResponse xmlns="{_NS}"><header><mutable>'
+        "<ReturnCode>090005</ReturnCode></mutable></header>"
+        "<body><ReturnCode>090005</ReturnCode></body></ebicsResponse>"
+    ).encode()
+    with pytest.raises(ReturnCodeError) as caught:
+        h005.raise_for_return_code(response)
+    assert not isinstance(caught.value, UnknownReturnCodeError)
+    # Without a bank ReportText, the message carries the code's verified symbolic name.
+    assert "EBICS_NO_DOWNLOAD_DATA_AVAILABLE" in str(caught.value)
+
+
+def test_check_return_code_fails_closed_on_an_empty_return_code() -> None:
+    # An empty <ReturnCode/> must never be skipped — silence is not success.
+    response = (
+        f'<ebicsResponse xmlns="{_NS}"><header><mutable>'
+        "<ReturnCode></ReturnCode></mutable></header>"
+        "<body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
+    ).encode()
+    with pytest.raises(ProtocolError):
+        h005.raise_for_return_code(response)
 
 
 def test_parse_upload_initialisation_response_returns_the_transaction_id() -> None:

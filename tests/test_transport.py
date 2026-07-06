@@ -28,6 +28,26 @@ class _FakeResponse:
         return self._body
 
 
+class _FakeOpener:
+    """Stands in for the transport's urllib opener: returns a response or raises."""
+
+    def __init__(self, response: _FakeResponse | None = None, error: Exception | None = None):
+        self._response = response
+        self._error = error
+
+    def open(self, request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        if self._error is not None:
+            raise self._error
+        assert self._response is not None
+        return self._response
+
+
+def _transport_with(opener: _FakeOpener) -> transport.Transport:
+    client = transport.Transport("https://ebicsweb.example.com/ebicsweb")
+    client._opener = opener  # type: ignore[assignment]
+    return client
+
+
 def test_rejects_non_https_endpoint() -> None:
     with pytest.raises(TransportError):
         transport.Transport("http://ebicsweb.example.com/ebicsweb")
@@ -62,42 +82,50 @@ def test_certifi_trust_is_skipped_when_certifi_is_absent(monkeypatch: pytest.Mon
     assert context.minimum_version == ssl.TLSVersion.TLSv1_2
 
 
-def test_post_returns_the_response_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        urllib.request, "urlopen", lambda *a, **k: _FakeResponse(b"<ebicsResponse/>")
-    )
-    client = transport.Transport("https://ebicsweb.example.com/ebicsweb")
+def test_post_returns_the_response_body() -> None:
+    client = _transport_with(_FakeOpener(response=_FakeResponse(b"<ebicsResponse/>")))
     assert client.post(b"<ebicsRequest/>") == b"<ebicsResponse/>"
 
 
-def test_5xx_is_transient(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _raise(*args: Any, **kwargs: Any) -> None:
-        raise urllib.error.HTTPError("https://x", 503, "unavailable", {}, None)  # type: ignore[arg-type]
+def _http_error(code: int, reason: str) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("https://x", code, reason, {}, None)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(urllib.request, "urlopen", _raise)
-    client = transport.Transport("https://ebicsweb.example.com/ebicsweb")
+
+def test_5xx_is_transient() -> None:
+    client = _transport_with(_FakeOpener(error=_http_error(503, "unavailable")))
     with pytest.raises(TransportError) as caught:
         client.post(b"<ebicsRequest/>")
     assert caught.value.retryability is Retryability.TRANSIENT
 
 
-def test_4xx_is_permanent(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _raise(*args: Any, **kwargs: Any) -> None:
-        raise urllib.error.HTTPError("https://x", 403, "forbidden", {}, None)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(urllib.request, "urlopen", _raise)
-    client = transport.Transport("https://ebicsweb.example.com/ebicsweb")
+def test_4xx_is_permanent() -> None:
+    client = _transport_with(_FakeOpener(error=_http_error(403, "forbidden")))
     with pytest.raises(TransportError) as caught:
         client.post(b"<ebicsRequest/>")
     assert caught.value.retryability is Retryability.PERMANENT
 
 
-def test_timeout_is_transient(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _raise(*args: Any, **kwargs: Any) -> None:
-        raise TimeoutError("timed out")
-
-    monkeypatch.setattr(urllib.request, "urlopen", _raise)
-    client = transport.Transport("https://ebicsweb.example.com/ebicsweb")
+def test_timeout_is_transient() -> None:
+    client = _transport_with(_FakeOpener(error=TimeoutError("timed out")))
     with pytest.raises(TransportError) as caught:
         client.post(b"<ebicsRequest/>")
     assert caught.value.retryability is Retryability.TRANSIENT
+
+
+def test_a_redirect_fails_closed_as_permanent() -> None:
+    # urllib would silently follow a 302 (turning the POST into a GET); the transport
+    # refuses redirects, so a redirecting endpoint is a hard, explicit failure.
+    client = _transport_with(_FakeOpener(error=_http_error(302, "found")))
+    with pytest.raises(TransportError) as caught:
+        client.post(b"<ebicsRequest/>")
+    assert caught.value.retryability is Retryability.PERMANENT
+    assert "redirect" in str(caught.value)
+
+
+def test_the_opener_refuses_redirects() -> None:
+    # The handler must answer every redirect with None, which makes urllib raise.
+    handler = transport._RedirectRefusedHandler()
+    request = urllib.request.Request("https://ebicsweb.example.com/ebicsweb")
+    assert (
+        handler.redirect_request(request, None, 302, "found", {}, "https://elsewhere") is None
+    )

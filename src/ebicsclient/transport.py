@@ -20,6 +20,22 @@ _DEFAULT_TIMEOUT_SECONDS = 30.0
 _TRANSIENT_STATUS = frozenset({408, 429})
 
 
+class _RedirectRefusedHandler(urllib.request.HTTPRedirectHandler):
+    """Refuses every HTTP redirect so a 3xx surfaces as an error instead of a silent GET."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> None:
+        # Returning None makes urllib raise the HTTPError for the 3xx response.
+        return None
+
+
 class Transport:
     """Posts EBICS request bodies to a bank endpoint over HTTPS."""
 
@@ -38,6 +54,12 @@ class Transport:
         self._url = url
         self._timeout = timeout
         self._ssl_context = _build_ssl_context()
+        # A dedicated opener that REFUSES redirects: urllib would otherwise follow them
+        # silently (turning the POST into a GET on 301/302/303), degrading a misconfigured
+        # or hijacked endpoint into confusing downstream errors instead of failing closed.
+        self._opener = urllib.request.build_opener(
+            _RedirectRefusedHandler, urllib.request.HTTPSHandler(context=self._ssl_context)
+        )
 
     def post(self, body: bytes) -> bytes:
         """Post an EBICS request body and return the raw response bytes.
@@ -60,12 +82,16 @@ class Transport:
         )
         logger.debug("POST %d bytes to %s", len(body), self._url)
         try:
-            with urllib.request.urlopen(
-                request, timeout=self._timeout, context=self._ssl_context
-            ) as response:
+            with self._opener.open(request, timeout=self._timeout) as response:
                 data: bytes = response.read()
                 return data
         except urllib.error.HTTPError as error:
+            if 300 <= error.code < 400:
+                raise TransportError(
+                    f"EBICS endpoint responded with a redirect (HTTP {error.code}); redirects "
+                    f"are refused — verify the configured endpoint URL",
+                    retryability=Retryability.PERMANENT,
+                ) from error
             transient = error.code in _TRANSIENT_STATUS or 500 <= error.code < 600
             raise TransportError(
                 f"EBICS endpoint returned HTTP {error.code}",

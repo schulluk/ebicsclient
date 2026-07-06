@@ -161,3 +161,26 @@ class ReturnCodeError(ProtocolError):
         self.code = code
         self.text = text
         super().__init__(code if text is None else f"{code}: {text}", retryability=retryability)
+
+
+class UnknownReturnCodeError(ReturnCodeError):
+    """The bank returned an EBICS code this client does not recognise.
+
+    Deliberately distinct from a *known* failure: the code is outside the client's
+    knowledge, so its meaning is unverified — it could be a bank-specific extension, a
+    spec code not yet in the client's table, or even a success variant (as ``011000``
+    once was). It is treated as a failure (fail closed, never fail open), but callers and
+    logs can tell it apart and verify the code against the EBICS specification and the
+    bank's documentation instead of trusting a masked classification.
+    """
+
+    def __init__(self, code: str, text: str | None = None) -> None:
+        self.code = code
+        self.text = text
+        detail = f" ({text})" if text is not None else ""
+        # Bypass ReturnCodeError.__init__ so the message carries the unknown-code framing.
+        ProtocolError.__init__(
+            self,
+            f"Unknown EBICS return code {code}{detail} — failing closed; verify the code "
+            f"against the EBICS specification and the bank's documentation",
+        )

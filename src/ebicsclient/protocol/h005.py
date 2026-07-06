@@ -28,7 +28,7 @@ from ebicsclient.certificates import (
     BankCertificateVerifier,
     CertificateProvider,
 )
-from ebicsclient.errors import ProtocolError, ReturnCodeError
+from ebicsclient.errors import ProtocolError, ReturnCodeError, UnknownReturnCodeError
 from ebicsclient.models import (
     Bank,
     BankKeys,
@@ -63,6 +63,24 @@ _OK_RETURN_CODE = "000000"
 # The bank acknowledges a positive download receipt with 011000
 # EBICS_DOWNLOAD_POSTPROCESS_DONE — a success code, not an error (validated live on ZKB).
 _RECEIPT_OK_CODES = frozenset({"000000", "011000"})
+
+# Return codes whose meaning this client has verified — from live ZKB responses (the bank's
+# own ReportText names the code) or the EBICS specification. Which of them count as success
+# is context-dependent (011000 only acknowledges a receipt), so success sets are passed per
+# call site. Anything NOT in this table raises UnknownReturnCodeError: still a failure
+# (never fail open), but explicitly labelled unverified rather than masked as a known one.
+_KNOWN_RETURN_CODES = {
+    "000000": "EBICS_OK",  # observed live
+    "011000": "EBICS_DOWNLOAD_POSTPROCESS_DONE",  # observed live (positive receipt ack)
+    "011001": "EBICS_DOWNLOAD_POSTPROCESS_SKIPPED",  # spec counterpart of 011000
+    "061001": "EBICS_AUTHENTICATION_FAILED",  # EBICS spec
+    "061002": "EBICS_INVALID_REQUEST",  # EBICS spec
+    "061099": "EBICS_INTERNAL_ERROR",  # EBICS spec
+    "090005": "EBICS_NO_DOWNLOAD_DATA_AVAILABLE",  # observed live
+    "091002": "EBICS_INVALID_USER_OR_USER_STATE",  # observed live
+    "091005": "EBICS_INVALID_ORDER_IDENTIFIER",  # observed live
+    "091210": "EBICS_X509_WRONG_KEY_USAGE",  # observed live
+}
 _NONCE_BYTES = 16  # 128-bit nonce, rendered as uppercase hex
 _SHA256_ALGORITHM = "http://www.w3.org/2001/04/xmlenc#sha256"
 _PHASE_INITIALISATION = "Initialisation"
@@ -603,19 +621,14 @@ def parse_download_receipt_response(response: bytes) -> None:
         response: The raw ``ebicsResponse`` bytes from the bank.
 
     Raises:
-        ProtocolError: the response could not be parsed or carries no return code.
-        ReturnCodeError: the bank reported a code that is neither OK nor the positive
-            receipt acknowledgement.
+        ProtocolError: the response could not be parsed, carries no return code, or
+            carries an empty one.
+        ReturnCodeError: the bank reported a known code that is neither OK nor the
+            positive receipt acknowledgement.
+        UnknownReturnCodeError: the bank reported a code outside the client's verified
+            table (a failure, explicitly labelled unverified).
     """
-    root = _parse(response)
-    return_codes = root.findall(f".//{{{NAMESPACE}}}ReturnCode")
-    if not return_codes:
-        raise ProtocolError("EBICS response carried no ReturnCode")
-    for return_code in return_codes:
-        if return_code.text is not None and return_code.text not in _RECEIPT_OK_CODES:
-            parent = return_code.getparent()
-            report = parent.find(f"{{{NAMESPACE}}}ReportText") if parent is not None else None
-            raise ReturnCodeError(return_code.text, report.text if report is not None else None)
+    _check_return_codes(_parse(response), _RECEIPT_OK_CODES)
 
 
 def parse_upload_initialisation_response(response: bytes) -> str:
@@ -677,17 +690,32 @@ def raise_for_return_code(response: bytes) -> None:
 
 
 def _check_return_code(root: etree._Element) -> None:
+    _check_return_codes(root, frozenset({_OK_RETURN_CODE}))
+
+
+def _check_return_codes(root: etree._Element, success_codes: frozenset[str]) -> None:
     # An EBICS response carries a *technical* ReturnCode in the header (well-formedness) and
-    # the authoritative *order* ReturnCode in the body; both must be OK. Checking only the
-    # first would miss a body-level rejection reported behind a header OK.
+    # the authoritative *order* ReturnCode in the body; every one of them must be a success
+    # code. This fails closed on everything else: an empty ReturnCode is a protocol error
+    # (never skipped), a known non-success code raises ReturnCodeError, and a code outside
+    # the client's verified table raises UnknownReturnCodeError — a failure that is
+    # explicitly labelled unverified instead of being masked as a known one.
     return_codes = root.findall(f".//{{{NAMESPACE}}}ReturnCode")
     if not return_codes:
         raise ProtocolError("EBICS response carried no ReturnCode")
     for return_code in return_codes:
-        if return_code.text is not None and return_code.text != _OK_RETURN_CODE:
-            parent = return_code.getparent()
-            report = parent.find(f"{{{NAMESPACE}}}ReportText") if parent is not None else None
-            raise ReturnCodeError(return_code.text, report.text if report is not None else None)
+        code = return_code.text.strip() if return_code.text is not None else ""
+        if not code:
+            raise ProtocolError("EBICS response carries an empty ReturnCode")
+        if code in success_codes:
+            continue
+        parent = return_code.getparent()
+        report = parent.find(f"{{{NAMESPACE}}}ReportText") if parent is not None else None
+        report_text = report.text if report is not None else None
+        known_name = _KNOWN_RETURN_CODES.get(code)
+        if known_name is None:
+            raise UnknownReturnCodeError(code, report_text)
+        raise ReturnCodeError(code, report_text if report_text is not None else known_name)
 
 
 def _child(parent: etree._Element, local_name: str) -> etree._Element:
