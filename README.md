@@ -1,8 +1,24 @@
 # ebicsclient — a pure-Python EBICS 3.0 (H005) client
 
-A from-scratch, pure-Python client for the **EBICS** banking protocol. It **downloads account
-statements (camt.053)** and **initiates payments (pain.001)** over EBICS 3.0 / H005 — starting with
-Zürcher Kantonalbank (ZKB), against which the whole flow is validated live.
+A from-scratch, pure-Python client for the **EBICS** banking protocol (EBICS 3.0 / H005),
+validated live against Zürcher Kantonalbank (ZKB).
+
+**What it provides today:**
+
+- **Key ceremony** — INI/HIA/HPB with X.509 key transmission (self-signed *mit Schlüsseln* or
+  CA-issued *mit Zertifikaten*), the printable initialisation letter (HTML/PDF), and bank-key
+  **pinning** across sessions
+- **Read** — statement/report downloads with parsers into typed models: **camt.053** end-of-day
+  statements, **camt.052** intraday reports, **camt.054** booking advices (incl. QRR/SCOR/LSV),
+  and **pain.002** payment status reports
+- **Write** — **pain.001** payment submission (BTU) with the A006 electronic signature
+- **Security throughout** — the bank's `AuthSignature` is verified on **every** response, unknown
+  return codes are never masked, and everything fails closed
+- **Self-inspection** — `available_order_types()` (HAA) and `subscriber_info()` (HTD)
+
+**What is missing:** distributed signatures (EDS/VEU — multi-person payment approval; see
+milestone 7 below), and validation against banks beyond ZKB. Legacy EBICS versions (H004 and
+earlier) are deliberately unsupported.
 
 - **Stack:** Python 3.11+, just two runtime deps — `cryptography` (RSA/AES) and `lxml` (XML /
   inclusive Canonical XML 1.0); everything else stdlib. No PHP/Java sidecar. (Rationale:
@@ -124,7 +140,23 @@ a real bank statement.
 
 - [x] Verify the bank's `AuthSignature` on every response — validated live on ZKB
 - [x] Subscriber self-inspection — `available_order_types()` (HAA) and `subscriber_info()` (HTD)
-- [ ] Distributed signatures (EDS) — parked until a validatable multi-signature setup exists
+
+**Milestone 7 — Distributed signatures (EDS/VEU)** (next; parked until validatable)
+
+EDS (*Elektronische Verteilte Unterschrift*) is EBICS's workflow for orders that need
+**multiple people to sign before the bank executes them** — dual control on payments. An order
+is uploaded with `requestEDS` and parks in the bank's VEU queue; further signatories list the
+queue, inspect the order, and deliver their A006 signatures until the configured quorum (e.g.
+first + second signature) is reached. The building blocks (A006 signing, the `SignatureFlag`,
+the admin-download transaction pattern) are in place; what is missing is a **validatable
+multi-user setup** — the ZKB test subscriber is single-user with `NumSigRequired=0`, so the
+workflow cannot be exercised there. This milestone starts when a downstream setup with a real
+multi-signature profile exists.
+
+- [ ] Upload into the VEU queue (`SignatureFlag` with `requestEDS`)
+- [ ] List pending orders (HVU/HVZ) and fetch order details (HVD) and transactions (HVT)
+- [ ] Deliver an additional signature (HVE) and cancel a pending order (HVS)
+- [ ] Validate the full quorum workflow against a multi-signature bank profile
 
 This client is **EBICS 3.0 (H005) only** — legacy versions (H004 and earlier) will not be
 supported (see [docs/04](docs/04-implementation-plan.md)); the `protocol/` seam exists for a

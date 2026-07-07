@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ebicsclient"
-version = "0.2.0"
+version = "1.3.0"
 description = "Pure-Python client for the EBICS 3.0 (H005) banking protocol"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,7 @@ license = { file = "LICENSE.md" }
 authors = [{ name = "Lukas Schulze" }]
 keywords = ["ebics", "banking", "iso20022", "camt", "h005", "fintech"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Financial and Insurance Industry",
     "License :: Other/Proprietary License",
