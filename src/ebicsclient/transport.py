@@ -49,6 +49,10 @@ class Transport:
         Raises:
             TransportError: the URL is not an HTTPS URL.
         """
+        if not isinstance(url, str):
+            raise TransportError(
+                f"EBICS endpoint URL must be a str, got {type(url).__name__} ({url!r})"
+            )
         if not url.lower().startswith("https://"):
             raise TransportError(f"EBICS endpoint must be an https:// URL, got {url!r}")
         self._url = url

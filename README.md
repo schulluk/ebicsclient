@@ -71,6 +71,17 @@ transaction_id = client.upload(PAIN_001, pain001_bytes)
 The **certificate-based ("mit Zertifikaten")** profile is a constructor option — see
 [docs/11-certificate-profiles.md](docs/11-certificate-profiles.md).
 
+> ### ⚠️ Loading EBICS identifiers from a config file? Quote them.
+>
+> EBICS IDs **can** carry leading zeros (a real Partner ID may look like `00123456`), and
+> ISO message versions look like `"08"`. Unquoted in YAML/JSON/TOML these parse as **numbers** —
+> the wrong type *and* silently stripped of their zeros (PyYAML even reads all-octal-digit
+> values as octal). Since 1.3.1 the library rejects non-string values immediately with an
+> explanatory error, but the correct fix is always **quoting the value in your config**
+> (`partner_id: "00123456"`, `message_version: "08"`) — never wrapping the parsed number in
+> `str()`, which would keep the wrong, zero-stripped identifier and talk to the bank as the
+> wrong subscriber. The same applies to digits-only keyring passphrases.
+
 ## Documentation index
 
 | Doc | Contents |

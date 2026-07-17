@@ -12,6 +12,27 @@ from enum import StrEnum
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 
+def _require_identifier(field_name: str, value: object) -> None:
+    # EBICS identifiers can carry leading zeros (e.g. a Partner ID of "00123456").
+    # Loaded from an unquoted YAML/JSON/TOML config value they arrive as numbers — the wrong
+    # type AND silently stripped of their zeros (PyYAML even reads all-octal-digit values as
+    # octal). Failing here, with the fix in the message, beats a cryptic TypeError four
+    # frames deep in a crypto or XML library.
+    if not isinstance(value, str):
+        raise TypeError(
+            f"{field_name} must be a str, got {type(value).__name__} ({value!r}). EBICS "
+            f"identifiers can carry leading zeros — quote them in your configuration to "
+            f"keep both the type and the zeros."
+        )
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be empty")
+
+
+def _require_optional_identifier(field_name: str, value: object) -> None:
+    if value is not None:
+        _require_identifier(field_name, value)
+
+
 @dataclass(frozen=True, slots=True)
 class Bank:
     """Connection details for a bank's EBICS endpoint.
@@ -19,10 +40,18 @@ class Bank:
     Attributes:
         host_id: The bank's EBICS Host ID.
         url: The bank's EBICS HTTPS endpoint.
+
+    Raises:
+        TypeError: a field is not a ``str`` (e.g. a numeric config value).
+        ValueError: a field is empty.
     """
 
     host_id: str
     url: str
+
+    def __post_init__(self) -> None:
+        _require_identifier("host_id", self.host_id)
+        _require_identifier("url", self.url)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,10 +61,19 @@ class User:
     Attributes:
         partner_id: The customer (Partner) ID.
         user_id: The subscriber (User) ID.
+
+    Raises:
+        TypeError: an ID is not a ``str`` — commonly an unquoted, zero-leading ID in a
+            YAML/JSON config parsed as a number (which also silently drops the zeros).
+        ValueError: an ID is empty.
     """
 
     partner_id: str
     user_id: str
+
+    def __post_init__(self) -> None:
+        _require_identifier("partner_id", self.partner_id)
+        _require_identifier("user_id", self.user_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +94,18 @@ class Keyring:
     authentication: rsa.RSAPrivateKey
     encryption: rsa.RSAPrivateKey
 
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("signature", self.signature),
+            ("authentication", self.authentication),
+            ("encryption", self.encryption),
+        ):
+            if not isinstance(value, rsa.RSAPrivateKey):
+                raise TypeError(
+                    f"{field_name} must be an RSA private key, got {type(value).__name__} — "
+                    f"generate keys with generate_keyring() or load them with load_keyring()"
+                )
+
 
 @dataclass(frozen=True, slots=True)
 class BankKeys:
@@ -73,6 +123,16 @@ class BankKeys:
     authentication: rsa.RSAPublicKey
     encryption: rsa.RSAPublicKey
 
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("authentication", self.authentication),
+            ("encryption", self.encryption),
+        ):
+            if not isinstance(value, rsa.RSAPublicKey):
+                raise TypeError(
+                    f"{field_name} must be an RSA public key, got {type(value).__name__}"
+                )
+
 
 @dataclass(frozen=True, slots=True)
 class BankKeyHashes:
@@ -89,6 +149,22 @@ class BankKeyHashes:
 
     authentication: bytes
     encryption: bytes
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("authentication", self.authentication),
+            ("encryption", self.encryption),
+        ):
+            if not isinstance(value, bytes):
+                raise TypeError(
+                    f"{field_name} must be the raw 32-byte SHA-256 digest as bytes, got "
+                    f"{type(value).__name__} — for a published hex hash use "
+                    f'bytes.fromhex(hash_text.replace(" ", ""))'
+                )
+            if len(value) != 32:
+                raise ValueError(
+                    f"{field_name} must be exactly 32 bytes (SHA-256), got {len(value)}"
+                )
 
 
 class InitializationState(StrEnum):
@@ -126,6 +202,16 @@ class BusinessTransactionFormat:
     message_version: str | None = None
     container: str | None = None
     service_option: str | None = None
+
+    def __post_init__(self) -> None:
+        # message_version is the classic trap: an unquoted "08" in YAML/JSON config arrives
+        # as the int 8 — wrong type and a silently different version on the wire.
+        _require_identifier("service_name", self.service_name)
+        _require_identifier("message_name", self.message_name)
+        _require_optional_identifier("scope", self.scope)
+        _require_optional_identifier("message_version", self.message_version)
+        _require_optional_identifier("container", self.container)
+        _require_optional_identifier("service_option", self.service_option)
 
 
 #: The Swiss camt.053.001.08 account-statement download (end-of-period, ZIP container).

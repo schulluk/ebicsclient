@@ -465,6 +465,14 @@ class Client:
             ReturnCodeError: the bank rejected the upload (e.g. a bad signature or order data).
             CryptoError: the order data could not be signed or encrypted.
         """
+        if not isinstance(order_data, bytes | bytearray):
+            # A str here would fail deep inside compression with an opaque error; and
+            # implicitly encoding it could silently alter the document. The caller owns
+            # the encoding: read the file in binary mode or encode it explicitly.
+            raise TypeError(
+                f"order_data must be bytes, got {type(order_data).__name__} — read the "
+                f"file in binary mode ('rb') or use .encode() on an XML string"
+            )
         bank_keys = self._require_bank_keys("Upload")
         logger.info("Upload: opening a %s/%s transaction", btf.service_name, btf.message_name)
         payload = h005.prepare_upload(self._user, self._keyring, bank_keys, order_data)

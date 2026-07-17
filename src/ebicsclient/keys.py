@@ -43,6 +43,18 @@ _KEY_FIELDS = ("signature", "authentication", "encryption")
 _CERTIFICATE_VALIDITY_DAYS = 365 * 10
 
 
+def _require_passphrase(passphrase: object) -> None:
+    # A non-str passphrase (e.g. a numeric value from an unquoted config entry) would
+    # surface as an AttributeError deep in the serialisation layer; fail here instead.
+    if not isinstance(passphrase, str):
+        raise KeyringError(
+            f"passphrase must be a str, got {type(passphrase).__name__} — quote it in "
+            f"your configuration"
+        )
+    if not passphrase:
+        raise KeyringError("A non-empty passphrase is required to encrypt the keyring")
+
+
 def generate_keyring(key_size: int = _MINIMUM_KEY_SIZE) -> Keyring:
     """Generate a fresh set of the three EBICS RSA key pairs.
 
@@ -182,8 +194,7 @@ def serialize_keyring(keyring: Keyring, passphrase: str) -> bytes:
     Raises:
         KeyringError: the passphrase is empty.
     """
-    if not passphrase:
-        raise KeyringError("A non-empty passphrase is required to encrypt the keyring")
+    _require_passphrase(passphrase)
     encryption = serialization.BestAvailableEncryption(passphrase.encode("utf-8"))
     encoded = {
         field: _private_key_to_pem(getattr(keyring, field), encryption) for field in _KEY_FIELDS
@@ -206,6 +217,7 @@ def deserialize_keyring(data: bytes, passphrase: str) -> Keyring:
         KeyringError: the data is malformed, of an unknown version, or the passphrase
             is wrong.
     """
+    _require_passphrase(passphrase)
     try:
         envelope = json.loads(data)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
@@ -224,30 +236,32 @@ def deserialize_keyring(data: bytes, passphrase: str) -> Keyring:
     return Keyring(**keys)
 
 
-def save_keyring(keyring: Keyring, path: Path, passphrase: str) -> None:
+def save_keyring(keyring: Keyring, path: str | Path, passphrase: str) -> None:
     """Write an encrypted keyring to a file (convenience over :func:`serialize_keyring`).
 
     Args:
         keyring: The key pairs to persist.
-        path: Destination file path; overwritten if it already exists.
+        path: Destination file path (a ``str`` or ``Path``); overwritten if it exists.
         passphrase: Secret used to encrypt the private keys. Never stored or logged.
 
     Raises:
-        KeyringError: the passphrase is empty, or the file could not be written.
+        KeyringError: the passphrase is empty or not a string, or the file could not be
+            written.
     """
     data = serialize_keyring(keyring, passphrase)
+    destination = Path(path)
     try:
-        path.write_bytes(data)
+        destination.write_bytes(data)
     except OSError as error:
-        raise KeyringError(f"Could not write keyring to {path}: {error}") from error
-    logger.info("Wrote encrypted keyring to %s", path)
+        raise KeyringError(f"Could not write keyring to {destination}: {error}") from error
+    logger.info("Wrote encrypted keyring to %s", destination)
 
 
-def load_keyring(path: Path, passphrase: str) -> Keyring:
+def load_keyring(path: str | Path, passphrase: str) -> Keyring:
     """Read and decrypt a keyring file (convenience over :func:`deserialize_keyring`).
 
     Args:
-        path: Path to the encrypted keyring file.
+        path: Path to the encrypted keyring file (a ``str`` or ``Path``).
         passphrase: Secret used when the keyring was saved.
 
     Returns:
@@ -255,12 +269,13 @@ def load_keyring(path: Path, passphrase: str) -> Keyring:
 
     Raises:
         KeyringError: the file is missing, malformed, of an unknown version, or the
-            passphrase is wrong.
+            passphrase is wrong or not a string.
     """
+    source = Path(path)
     try:
-        data = path.read_bytes()
+        data = source.read_bytes()
     except OSError as error:
-        raise KeyringError(f"Could not read keyring from {path}: {error}") from error
+        raise KeyringError(f"Could not read keyring from {source}: {error}") from error
     return deserialize_keyring(data, passphrase)
 
 

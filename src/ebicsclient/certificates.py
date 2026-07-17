@@ -91,8 +91,18 @@ class MappingCertificateProvider:
         Args:
             certificates: A mapping from each :class:`~ebicsclient.keys.CertificateUsage` to
                 the CA-issued certificate certifying that key.
+
+        Raises:
+            TypeError: a mapping value is not an ``x509.Certificate``.
         """
         self._certificates = dict(certificates)
+        for usage, certificate in self._certificates.items():
+            if not isinstance(certificate, x509.Certificate):
+                raise TypeError(
+                    f"The {usage} certificate must be an x509.Certificate, got "
+                    f"{type(certificate).__name__} — load PEM/DER bytes with "
+                    f"load_certificate()"
+                )
 
     def certificate(
         self, usage: CertificateUsage, private_key: rsa.RSAPrivateKey, subject_name: str
@@ -152,6 +162,12 @@ class TrustAnchorVerifier:
         self._anchors = list(trust_anchors)
         if not self._anchors:
             raise BankCertificateError("At least one trust anchor is required")
+        for anchor in self._anchors:
+            if not isinstance(anchor, x509.Certificate):
+                raise TypeError(
+                    f"Trust anchors must be x509.Certificate objects, got "
+                    f"{type(anchor).__name__} — load PEM/DER bytes with load_certificate()"
+                )
 
     def verify(self, certificate: x509.Certificate, usage: CertificateUsage) -> None:
         """Check the bank certificate's validity period and issuer against the anchors."""
@@ -176,11 +192,16 @@ def load_certificate(data: bytes) -> x509.Certificate:
         The parsed certificate.
 
     Raises:
-        CertificateError: the bytes are not a readable X.509 certificate.
+        CertificateError: the data is not bytes or not a readable X.509 certificate.
     """
+    if not isinstance(data, bytes | bytearray):
+        raise CertificateError(
+            f"Certificate data must be bytes, got {type(data).__name__} — read the "
+            f"certificate file in binary mode ('rb')"
+        )
     for loader in (x509.load_pem_x509_certificate, x509.load_der_x509_certificate):
         try:
-            return loader(data)
+            return loader(bytes(data))
         except ValueError:
             continue
     raise CertificateError("Data is not a readable PEM or DER X.509 certificate")

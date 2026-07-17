@@ -68,7 +68,10 @@ def make_ini_letter(
 
     Raises:
         MissingDependencyError: PDF output was requested but the ``pdf`` extra is absent.
+        TypeError: ``branding`` is not a ``str``.
     """
+    if not isinstance(branding, str):
+        raise TypeError(f"branding must be a str, got {type(branding).__name__}")
     resolved = _resolve_format(output_format)
     when = created if created is not None else datetime.date.today()
     panels = _key_panels(keyring)

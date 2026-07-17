@@ -91,6 +91,14 @@ specific return code on `ReturnCodeError`).
 - **Gathering** those values from env vars / a vault / Django settings is the **consumer's** job, never the
   library's. Explicit config is auditable; silent environment reads are a surprise and a leakage footgun on a
   money-moving codebase.
+- **Validate at the public boundary, with errors that teach the fix.** Every caller-supplied value is
+  type-checked where it enters the library (dataclass `__post_init__`, first line of a public function) —
+  never allowed to drift into `lxml`/`cryptography` and die there as a cryptic C-extension error. Learned
+  from the field: EBICS identifiers **can** carry leading zeros (`"00123456"`) and versions look like `"08"`;
+  unquoted in a consumer's YAML/JSON config they arrive as *numbers* — wrong type **and** silently
+  zero-stripped. The error message must therefore say "quote the value in your configuration", because the
+  obvious caller "fix" (`str(...)`) would keep a wrong, zero-stripped identifier and address the wrong
+  subscriber. See the README's quoting warning and `tests/test_input_validation.py`.
 
 ## Security (banking client — non-negotiable)
 
