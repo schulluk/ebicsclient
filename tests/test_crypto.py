@@ -137,3 +137,24 @@ def test_decrypt_order_data_round_trips(keyring: Keyring) -> None:
 def test_decrypt_order_data_rejects_an_unrecoverable_transaction_key(keyring: Keyring) -> None:
     with pytest.raises(CryptoError):
         crypto.decrypt_order_data(keyring.encryption, b"not a valid RSA ciphertext", b"")
+
+
+def test_decrypt_order_data_refuses_a_decompression_bomb(keyring: Keyring) -> None:
+    # A tiny, highly compressible stream that inflates past the safety ceiling must be
+    # rejected rather than exhausting memory — the bank's response signature does not cover
+    # this payload, so TLS is the only integrity guard and a hostile endpoint could send it.
+    bomb = b"\x00" * (crypto._MAX_INFLATED_BYTES + 1)
+    transaction_key, encrypted = encrypt_order_data(keyring.encryption.public_key(), bomb)
+    with pytest.raises(CryptoError, match="decompression bomb"):
+        crypto.decrypt_order_data(keyring.encryption, transaction_key, encrypted)
+
+
+def test_inflate_bounded_allows_data_up_to_the_limit() -> None:
+    # Inflating to exactly the limit is fine; only exceeding it fails. This also exercises
+    # the multi-chunk path (the payload is far larger than one inflate chunk).
+    import zlib
+
+    payload = b"A" * (4 * 1024 * 1024)
+    assert crypto._inflate_bounded(zlib.compress(payload), len(payload)) == payload
+    with pytest.raises(CryptoError, match="decompression bomb"):
+        crypto._inflate_bounded(zlib.compress(payload), len(payload) - 1)

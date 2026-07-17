@@ -90,6 +90,10 @@ _KNOWN_RETURN_CODES = {
     "091210": "EBICS_X509_WRONG_KEY_USAGE",  # observed live
 }
 _NONCE_BYTES = 16  # 128-bit nonce, rendered as uppercase hex
+# EBICS H005 mandates RSA keys of at least 2048 bits. Reject a bank key below that floor
+# rather than trust it: a weak modulus delivered over a compromised HPB (the response is
+# unsigned by design, guarded only by TLS and out-of-band hash/pinning) must not be used.
+_MINIMUM_BANK_KEY_BITS = 2048
 _SHA256_ALGORITHM = "http://www.w3.org/2001/04/xmlenc#sha256"
 _PHASE_INITIALISATION = "Initialisation"
 _PHASE_TRANSFER = "Transfer"
@@ -957,13 +961,20 @@ def _public_key_from_info(
     # in case a bank sends the legacy representation.
     certificate = info.findtext(f".//{{{_DS}}}X509Certificate")
     if certificate is not None:
-        return _public_key_from_certificate(certificate, info_tag, usage, verifier)
-    if verifier is not None:
+        public_key = _public_key_from_certificate(certificate, info_tag, usage, verifier)
+    elif verifier is not None:
         # A verifier was required but the bank sent a bare key with no certificate to check.
         raise ProtocolError(
             f"HPB response <{info_tag}> carries no certificate to verify"
         )
-    return _public_key_from_rsa_key_value(info, info_tag)
+    else:
+        public_key = _public_key_from_rsa_key_value(info, info_tag)
+    if public_key.key_size < _MINIMUM_BANK_KEY_BITS:
+        raise ProtocolError(
+            f"HPB response <{info_tag}> carries a {public_key.key_size}-bit RSA key, below "
+            f"the EBICS minimum of {_MINIMUM_BANK_KEY_BITS} bits — refusing to trust it"
+        )
+    return public_key
 
 
 def _public_key_from_certificate(

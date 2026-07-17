@@ -34,6 +34,16 @@ from ebicsclient.errors import CryptoError
 # EBICS order-data encryption uses a 128-bit AES transaction key.
 _TRANSACTION_KEY_BYTES = 16
 
+# Ceiling on the inflated size of a single order-data stream. Downloaded order data is
+# deflate-compressed by the bank, and a hostile or compromised endpoint could send a highly
+# compressible "decompression bomb" that inflates to many gigabytes and exhausts memory
+# (the response AuthSignature covers the transaction envelope, not the encrypted payload, so
+# TLS is the only integrity guard on this byte stream). 512 MiB is far above any real EBICS
+# download while still bounding the blast radius; raise it only with a concrete need.
+_MAX_INFLATED_BYTES = 512 * 1024 * 1024
+# Inflate in bounded steps so a single decompress() call can never allocate without limit.
+_INFLATE_CHUNK_BYTES = 1024 * 1024
+
 # XML-DSig algorithm identifiers used by EBICS.
 _DS_NAMESPACE = "http://www.w3.org/2000/09/xmldsig#"
 _INCLUSIVE_C14N = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
@@ -149,12 +159,49 @@ def decrypt_order_data(
     try:
         decryptor = Cipher(algorithms.AES(symmetric_key), modes.CBC(_NULL_IV)).decryptor()
         compressed = decryptor.update(encrypted_order_data) + decryptor.finalize()
-        # The plaintext is a DEFLATE stream followed by block padding (not PKCS#7). Inflate
-        # it and let the decompressor stop at the end of the stream, ignoring the padding.
-        decompressor = zlib.decompressobj()
-        return decompressor.decompress(compressed) + decompressor.flush()
-    except (ValueError, zlib.error) as error:
+    except ValueError as error:
         raise CryptoError("Could not decrypt the EBICS order data") from error
+    # The plaintext is a DEFLATE stream followed by block padding (not PKCS#7). Inflate it
+    # with a hard output ceiling: the decompressor stops at the end of the stream (ignoring
+    # the padding), and a decompression bomb is rejected rather than exhausting memory.
+    return _inflate_bounded(compressed, _MAX_INFLATED_BYTES)
+
+
+def _inflate_bounded(compressed: bytes, limit: int) -> bytes:
+    """Inflate a DEFLATE stream, refusing to produce more than ``limit`` bytes.
+
+    Args:
+        compressed: The DEFLATE-compressed bytes (trailing non-DEFLATE padding is ignored).
+        limit: The maximum number of inflated bytes to allow before failing closed.
+
+    Returns:
+        The inflated bytes.
+
+    Raises:
+        CryptoError: the stream is not valid DEFLATE data, or it inflates past ``limit``.
+    """
+    decompressor = zlib.decompressobj()
+    output = bytearray()
+    chunk = compressed
+    try:
+        while chunk and not decompressor.eof:
+            output += decompressor.decompress(chunk, _INFLATE_CHUNK_BYTES)
+            if len(output) > limit:
+                raise CryptoError(
+                    f"EBICS order data inflates past the {limit}-byte safety limit — "
+                    f"refusing a possible decompression bomb"
+                )
+            # unconsumed_tail holds input deferred because the output cap was hit; feed it back.
+            chunk = decompressor.unconsumed_tail
+        output += decompressor.flush()
+    except zlib.error as error:
+        raise CryptoError("Could not decrypt the EBICS order data") from error
+    if len(output) > limit:
+        raise CryptoError(
+            f"EBICS order data inflates past the {limit}-byte safety limit — "
+            f"refusing a possible decompression bomb"
+        )
+    return bytes(output)
 
 
 def new_transaction_key() -> bytes:

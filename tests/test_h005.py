@@ -161,6 +161,18 @@ def test_parse_hpb_response_raises_on_a_non_ok_return_code(keyring: Keyring) -> 
         h005.parse_hpb_response(_ERROR_RESPONSE, keyring)
 
 
+def test_parse_hpb_response_rejects_a_bank_key_below_the_minimum_size(keyring: Keyring) -> None:
+    # The HPB response is unsigned by design (guarded only by TLS and out-of-band hashes), so
+    # a weak modulus from a compromised endpoint must be refused, not trusted. Build a bank
+    # keyring with a 1024-bit key — Keyring checks the type, not the size, so this is possible.
+    weak = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    strong = keys.generate_keyring()
+    bank_keyring = Keyring(signature=strong.signature, authentication=weak, encryption=weak)
+    response = make_hpb_response(keyring, bank_keyring)
+    with pytest.raises(ProtocolError, match="1024-bit RSA key, below the EBICS minimum"):
+        h005.parse_hpb_response(response, keyring)
+
+
 def test_ini_request_embeds_a_ca_issued_certificate_from_the_provider(
     bank: Bank, user: User, keyring: Keyring
 ) -> None:
