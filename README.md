@@ -98,6 +98,7 @@ The **certificate-based ("mit Zertifikaten")** profile is a constructor option �
 | [docs/09-zkb-test-platform-settings.md](docs/09-zkb-test-platform-settings.md) | What the ZKB test platform exposes, and its upload/simulation model |
 | [docs/10-btf-order-types.md](docs/10-btf-order-types.md) | ZKB's EBICS order-type → H005 BTF catalogue |
 | [docs/11-certificate-profiles.md](docs/11-certificate-profiles.md) | "mit Schlüsseln" vs "mit Zertifikaten", and the certificate seam |
+| [docs/12-verification-ledger.md](docs/12-verification-ledger.md) | Every protocol claim → spec citation → oracle → status; the 2.5→3.0 audit |
 | `../local/` (outside the repo) | Real ZKB connection credentials, kept in the workspace **outside** the repo — can't be committed |
 
 ## Development

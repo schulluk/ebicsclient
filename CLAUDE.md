@@ -71,6 +71,18 @@ repeating that class of bug:
   shape), the higher the confidence bar and the sooner it must be schema-checked — those errors
   propagate furthest. Keep spec-uncertainty distinct from execution-uncertainty; don't hedge the
   hard part while silently trusting the foundation.
+- **Version-boundary rule.** Knowledge from EBICS 2.x is *contamination* until re-cited against the
+  3.0 spec — the spec's own amendment-history table (pages 2–3) lists everything that changed and is
+  the checklist. This is how the initialisation letter shipped with the 2.x public-key hash instead
+  of the 3.0 certificate-DER hash and failed a real ZKB activation (see docs/12).
+- **"Protocol surface" includes paper.** Anything the bank parses, compares, or verifies falls under
+  the citation discipline — the initialisation letters are machine-compared by the bank's back
+  office and are wire format, not "rendering".
+- **Maintain the verification ledger** ([docs/12-verification-ledger.md](docs/12-verification-ledger.md)):
+  every protocol-surface claim gets a row (citation + oracle + status); no oracle ⇒ labelled
+  UNVERIFIED there *and* in the README. New protocol code lands with a ledger row, or not at all.
+  Paths the test platform cannot exercise (it auto-activates, so letters; EDS) never silently count
+  as validated.
 
 ## Scope discipline
 

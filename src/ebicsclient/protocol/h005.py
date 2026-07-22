@@ -957,8 +957,10 @@ def _public_key_from_info(
     info = root.find(f".//{{{NAMESPACE}}}{info_tag}")
     if info is None:
         raise ProtocolError(f"HPB response is missing <{info_tag}>")
-    # H005 carries the bank key as an X.509 certificate; fall back to a plain RSAKeyValue
-    # in case a bank sends the legacy representation.
+    # H005 makes ds:X509Data mandatory (ebics_types_H005.xsd, PubKeyInfoType), but per the
+    # xmldsig schema X509Data may legally omit the X509Certificate element — so read the
+    # certificate when present (the norm) and fall back to a bare RSA key value otherwise.
+    # With a verifier configured there is nothing to verify without a certificate: refuse.
     certificate = info.findtext(f".//{{{_DS}}}X509Certificate")
     if certificate is not None:
         public_key = _public_key_from_certificate(certificate, info_tag, usage, verifier)
