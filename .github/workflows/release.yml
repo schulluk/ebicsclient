@@ -42,7 +42,7 @@ jobs:
       - name: Build sdist and wheel
         run: uv build
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -58,7 +58,7 @@ jobs:
       # anywhere; PyPI trusts this repository + workflow + environment combination.
       id-token: write
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
