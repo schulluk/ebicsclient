@@ -173,6 +173,18 @@ def test_parse_hpb_response_rejects_a_bank_key_below_the_minimum_size(keyring: K
         h005.parse_hpb_response(response, keyring)
 
 
+def test_ini_requests_embed_an_identical_certificate_across_builds(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    # The initialisation letter prints the SHA-256 of the certificate INI transmitted;
+    # the bank compares the two. Default (self-signed) certificates are deterministic, so
+    # rebuilding the request — even in a later session — must embed byte-identical DER.
+    first = _order_data(h005.build_ini_request(bank, user, keyring))
+    second = _order_data(h005.build_ini_request(bank, user, keyring))
+    certificate = f".//{{{_DS}}}X509Certificate"
+    assert first.findtext(certificate) == second.findtext(certificate)
+
+
 def test_ini_request_embeds_a_ca_issued_certificate_from_the_provider(
     bank: Bank, user: User, keyring: Keyring
 ) -> None:

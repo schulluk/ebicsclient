@@ -38,9 +38,19 @@ _PUBLIC_EXPONENT = 65537
 _KEYRING_FORMAT_VERSION = 1
 _KEY_FIELDS = ("signature", "authentication", "encryption")
 
-# Self-signed certificates for the key-based ("mit Schlüsseln") profile are long-lived;
-# the bank only extracts the public key from them.
-_CERTIFICATE_VALIDITY_DAYS = 365 * 10
+# Self-signed certificates for the key-based ("mit Schlüsseln") profile are DETERMINISTIC:
+# regenerating one for the same key always yields byte-identical DER. That matters because
+# EBICS 3.0 initialisation letters carry the SHA-256 hash of the DER-encoded certificate
+# (EBICS 3.0 spec, section 4.4.1.2.3), and the bank compares it against the certificate it
+# received over INI/HIA — so the letter must be able to reproduce that exact certificate
+# from the keyring alone, in any later session. Determinism comes from fixed validity
+# dates, a serial derived from the key, and RSA PKCS#1 v1.5 signing (which is itself
+# deterministic). The Swiss Market Practice Guidelines EBICS 3.0 (section 6.1) explicitly
+# allow any validity value including unlimited (9999-12-31).
+_CERTIFICATE_NOT_BEFORE = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
+_CERTIFICATE_NOT_AFTER = datetime.datetime(9999, 12, 31, 23, 59, 59, tzinfo=datetime.UTC)
+# RFC 5280 caps serial numbers at 20 octets; 16 digest bytes stay comfortably below.
+_CERTIFICATE_SERIAL_BYTES = 16
 
 
 def _require_passphrase(passphrase: object) -> None:
@@ -109,12 +119,19 @@ def _key_usage(usage: CertificateUsage) -> x509.KeyUsage:
 def generate_self_signed_certificate(
     private_key: rsa.RSAPrivateKey, common_name: str, usage: CertificateUsage
 ) -> x509.Certificate:
-    """Generate a self-signed X.509 certificate carrying an EBICS public key.
+    """Generate a deterministic self-signed X.509 certificate carrying an EBICS public key.
 
     EBICS 3.0 (H005) transmits public keys as X.509 certificates (``ds:X509Data``). In the
     key-based ("mit Schlüsseln") profile the certificate is self-signed by the very key it
     carries, and the bank extracts the public key from it. The bank *does* validate the
     certificate's Key Usage against its EBICS role, so it is set from ``usage``.
+
+    The certificate is **deterministic**: the same key, name, and usage always produce
+    byte-identical DER (fixed validity, key-derived serial, deterministic PKCS#1 v1.5
+    signature). The EBICS 3.0 initialisation letters carry the SHA-256 hash of this DER
+    (see :func:`certificate_fingerprint`), and the bank compares it against the certificate
+    delivered over INI/HIA — determinism lets the letter reproduce that certificate from
+    the keyring alone, without persisting certificates.
 
     Args:
         private_key: The key pair to certify; its public half is embedded and it self-signs.
@@ -125,18 +142,53 @@ def generate_self_signed_certificate(
         The self-signed certificate.
     """
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
-    now = datetime.datetime.now(datetime.UTC)
     return (
         x509.CertificateBuilder()
         .subject_name(name)
         .issuer_name(name)
         .public_key(private_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=1))
-        .not_valid_after(now + datetime.timedelta(days=_CERTIFICATE_VALIDITY_DAYS))
+        .serial_number(_deterministic_serial(private_key.public_key(), common_name, usage))
+        .not_valid_before(_CERTIFICATE_NOT_BEFORE)
+        .not_valid_after(_CERTIFICATE_NOT_AFTER)
         .add_extension(_key_usage(usage), critical=True)
         .sign(private_key, hashes.SHA256())
     )
+
+
+def _deterministic_serial(
+    public_key: rsa.RSAPublicKey, common_name: str, usage: CertificateUsage
+) -> int:
+    # A serial derived from the certified key (plus name and role) keeps regeneration
+    # byte-identical while staying unique per certificate. RFC 5280 requires a positive
+    # serial of at most 20 octets; 16 digest bytes always satisfy both (`or 1` covers the
+    # astronomically unlikely all-zero digest).
+    digest = hashlib.sha256(
+        b"|".join(
+            (
+                _fingerprint_data(public_key.public_numbers()),
+                common_name.encode("utf-8"),
+                usage.value.encode("ascii"),
+            )
+        )
+    ).digest()
+    return int.from_bytes(digest[:_CERTIFICATE_SERIAL_BYTES], "big") or 1
+
+
+def certificate_fingerprint(certificate: x509.Certificate) -> bytes:
+    """Compute the SHA-256 fingerprint of a certificate's DER encoding.
+
+    This is the hash the EBICS 3.0 initialisation letters print (spec section 4.4.1.2.3):
+    the SHA-256 of the certificate in DER binary format, shown as uppercase hexadecimal.
+    The bank compares it against the certificate received over INI/HIA before activating
+    the subscriber.
+
+    Args:
+        certificate: The certificate to fingerprint.
+
+    Returns:
+        The 32-byte SHA-256 digest of the DER-encoded certificate.
+    """
+    return certificate.fingerprint(hashes.SHA256())
 
 
 def bank_key_hashes(bank_keys: BankKeys) -> BankKeyHashes:

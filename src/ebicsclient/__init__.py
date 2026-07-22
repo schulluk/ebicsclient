@@ -39,6 +39,7 @@ from ebicsclient.errors import (
 from ebicsclient.keys import (
     CertificateUsage,
     bank_key_hashes,
+    certificate_fingerprint,
     deserialize_keyring,
     generate_keyring,
     generate_self_signed_certificate,
@@ -139,6 +140,7 @@ __all__ = [
     "User",
     "__version__",
     "bank_key_hashes",
+    "certificate_fingerprint",
     "deserialize_keyring",
     "generate_keyring",
     "generate_self_signed_certificate",

@@ -93,18 +93,22 @@ class Client:
         output_format: OutputFormat = OutputFormat.AUTO,
         branding: str = "ebicsClient",
     ) -> Letter:
-        """Render the initialisation letter to print, sign, and send to the bank.
+        """Render the initialisation letters (INI and HIA) to print, sign, and send.
 
-        The letter carries the subscriber's public-key hashes so the bank can verify, out
-        of band, the keys it received electronically over INI and HIA.
+        The letters carry the subscriber's certificates and their SHA-256 DER
+        fingerprints (EBICS 3.0 spec, section 4.4.1.2.3) so the bank can verify, out of
+        band, the certificates it received electronically over INI and HIA. They are
+        rendered from this client's certificate provider, so the printed fingerprints
+        match the certificates :meth:`ini` and :meth:`hia` transmitted.
 
         Args:
             output_format: The output format. ``AUTO`` renders PDF when the optional
                 ``pdf`` extra is installed, otherwise HTML.
-            branding: A name shown in the letter's footer; defaults to ``"ebicsClient"``.
+            branding: A name shown in the letters' footer; defaults to ``"ebicsClient"``.
 
         Returns:
-            The rendered letter (format, media type, and content bytes).
+            The rendered letters (format, media type, and content bytes) — the INI
+            letter and the HIA letter, each on its own page.
 
         Raises:
             MissingDependencyError: PDF output was requested without the ``pdf`` extra.
@@ -113,6 +117,7 @@ class Client:
             self._bank,
             self._user,
             self._keyring,
+            certificate_provider=self._certificate_provider,
             output_format=output_format,
             branding=branding,
         )

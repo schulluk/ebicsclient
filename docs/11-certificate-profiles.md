@@ -6,7 +6,14 @@ subscriber's certificate comes from and how the bank's certificate is trusted:
 
 - **mit Schlüsseln** (key-based) — the certificate is **self-signed** by the key it carries.
   Identity is established out of band: the signed initialisation letter, or online activation.
-  This is the default and what the ZKB validation used.
+  This is the default and what the ZKB validation used. The self-signed certificates are
+  **deterministic** (fixed validity 2020-01-01 → 9999-12-31, key-derived serial, deterministic
+  PKCS#1 v1.5 signature): regenerating one for the same key yields **byte-identical DER**. This
+  matters because the EBICS 3.0 initialisation letters print the SHA-256 hash of the DER-encoded
+  certificate (spec section 4.4.1.2.3) and the bank compares it against the certificate INI/HIA
+  transmitted — determinism lets any later session reproduce that certificate from the keyring
+  alone, without persisting certificates. (The Swiss Market Practice Guidelines section 6.1
+  explicitly allow unlimited certificate validity.)
 - **mit Zertifikaten** (certificate-based) — the certificate is **issued by a CA the bank
   trusts**, and the bank validates the chain. Common at German and French banks.
 

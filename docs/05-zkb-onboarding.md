@@ -12,11 +12,17 @@ activation PIN**.
 1. **Generate** your three RSA keypairs (A006 sig, X002 auth, E002 enc) → encrypted keyring.
 2. **INI** — send your signature public key (`ebicsUnsecuredRequest`, order type `INI`).
 3. **HIA** — send your authentication + encryption public keys (order type `HIA`).
-4. **Initialisierungsbriefe** — `make_ini_letter()` renders the letter (covering all three keys) as
-   **printable HTML** by default (no dependency) or as **PDF** with the optional `pdf` extra; `AUTO`
-   picks PDF when that extra is installed, else HTML. It contains the SHA-256 hashes of *your* public
-   keys. **Sign it by hand (legally valid signature)** and mail to ZKB Kompetenzcenter Services. ZKB
-   verifies the signature against documents on file, then activates and confirms your access. See
+4. **Initialisierungsbriefe** — `make_ini_letter()` renders **both** EBICS 3.0 letters (the INI
+   letter with the A006 signature certificate; the HIA letter with the X002 and E002 certificates,
+   on its own page) as **printable HTML** by default (no dependency) or as **PDF** with the optional
+   `pdf` extra; `AUTO` picks PDF when that extra is installed, else HTML. Per the EBICS 3.0 spec
+   (section 4.4.1.2.3) each letter shows the certificate in PEM **and the SHA-256 hash of its DER
+   encoding** in uppercase hex — *not* the EBICS 2.x public-key (`exponent modulus`) hash; the bank
+   compares those fingerprints against the certificates it received over INI/HIA. The default
+   self-signed certificates are **deterministic**, so the letter always reproduces exactly the
+   certificates the requests transmitted, from the keyring alone. **Sign each page by hand (legally
+   valid signature)** and mail to ZKB Kompetenzcenter Services. ZKB verifies the signature against
+   documents on file, then activates and confirms your access. See
    [doc 07](07-handshake-testing.md) for the end-to-end test walkthrough.
 5. **HPB** — download ZKB's public keys and **verify them against the hashes printed on p.2 of the
    Bankparameterdaten letter** (in `../local/`).
@@ -48,3 +54,14 @@ Contact: **support.epayment@zkb.ch / +41 44 293 99 15** (Kompetenzcenter Service
 
 - Confirm **plain keys** ("mit Schlüsseln") are fine for download-only — assume yes, proceed.
 - Profile **T** (no distributed signature) — irrelevant since download-only.
+
+## Production watch-item: `BankPubKeyDigests` hash format
+
+The EBICS 3.0 spec (section 5.5.1.1) defines the `BankPubKeyDigests` values in requests as the
+SHA-256 over the bank **certificate's DER** — but this client sends the EBICS 2.x public-key
+(`exponent modulus`) digest, and the ZKB **test platform accepted that in every live
+transaction** (downloads and uploads). ZKB's published Bankparameterdaten hashes are also
+public-key hashes, so HPB pinning stays in the `e m` format. If ZKB **production** ever rejects
+requests with `EBICS_BANK_PUBKEY_UPDATE_REQUIRED` despite fresh HPB keys, this mismatch is the
+first suspect: the fix is to retain the bank *certificates* from the HPB response and send
+their DER SHA-256 fingerprints instead.

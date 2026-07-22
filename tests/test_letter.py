@@ -1,4 +1,12 @@
-"""Tests for ebicsclient.letter: HTML and PDF initialisation-letter rendering."""
+"""Tests for ebicsclient.letter: the EBICS 3.0 INI/HIA initialisation letters.
+
+EBICS 3.0 (spec sections 4.4.1.2.3 and 11.5) defines the letters' content: the INI
+letter carries the A006 signature certificate, the HIA letter the X002 authentication
+and E002 encryption certificates — each as PEM plus the SHA-256 hash of the DER-encoded
+certificate in uppercase hexadecimal. The bank compares those hashes against the
+certificates INI/HIA transmitted, so the letter must reproduce exactly those
+certificates.
+"""
 
 import datetime
 import re
@@ -8,7 +16,7 @@ import pytest
 
 from ebicsclient import keys, letter
 from ebicsclient.errors import MissingDependencyError
-from ebicsclient.keys import public_key_hash
+from ebicsclient.keys import CertificateUsage, certificate_fingerprint
 from ebicsclient.models import Bank, Keyring, OutputFormat, User
 
 
@@ -27,16 +35,23 @@ def keyring() -> Keyring:
     return keys.generate_keyring()
 
 
-def _grouped_hash(keyring: Keyring) -> str:
-    digest = public_key_hash(keyring.signature.public_key())
-    return " ".join(f"{byte:02X}" for byte in digest)
+def _certificate_hash(keyring: Keyring, usage: CertificateUsage, user: User) -> str:
+    # The hash the bank compares: SHA-256 over the DER of the very certificate INI/HIA
+    # sends — regenerated here exactly as the default provider does.
+    private_key = getattr(keyring, usage.value)
+    certificate = keys.generate_self_signed_certificate(private_key, user.user_id, usage)
+    return " ".join(f"{byte:02X}" for byte in certificate_fingerprint(certificate))
 
 
-def test_html_letter_carries_ids_versions_and_hashes(
+def test_html_letter_carries_ids_versions_and_certificate_hashes(
     bank: Bank, user: User, keyring: Keyring
 ) -> None:
     result = letter.make_ini_letter(
-        bank, user, keyring, output_format=OutputFormat.HTML, created=datetime.date(2026, 6, 30)
+        bank,
+        user,
+        keyring,
+        output_format=OutputFormat.HTML,
+        created=datetime.datetime(2026, 6, 30, 12, 34, 56, tzinfo=datetime.UTC),
     )
     assert result.output_format is OutputFormat.HTML
     assert result.media_type == "text/html; charset=utf-8"
@@ -46,9 +61,42 @@ def test_html_letter_carries_ids_versions_and_hashes(
     assert user.partner_id in text
     assert user.user_id in text
     assert "2026-06-30" in text
+    assert "12:34:56" in text
+    # Both letters are present, each with its order type.
+    assert "EBICS Initialisation Letter (INI)" in text
+    assert "EBICS Initialisation Letter (HIA)" in text
     for version in ("A006", "X002", "E002"):
         assert version in text
-    assert _grouped_hash(keyring) in text
+    # The EBICS 3.0 letter hash: SHA-256 over the certificate DER, per certificate.
+    for usage in CertificateUsage:
+        assert _certificate_hash(keyring, usage, user) in text
+
+
+def test_html_letter_embeds_the_certificates_in_pem(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    text = letter.make_ini_letter(
+        bank, user, keyring, output_format=OutputFormat.HTML
+    ).content.decode("utf-8")
+    # The spec presents each certificate in PEM format on the letter.
+    assert text.count("BEGIN CERTIFICATE") == 3
+
+
+def test_letter_hashes_are_stable_across_renderings(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    # Certificates are deterministic, so two independently rendered letters print the
+    # same fingerprints — the property that lets a letter printed today match an INI/HIA
+    # sent in an earlier session.
+    first = letter.make_ini_letter(
+        bank, user, keyring, output_format=OutputFormat.HTML
+    ).content.decode("utf-8")
+    second = letter.make_ini_letter(
+        bank, user, keyring, output_format=OutputFormat.HTML
+    ).content.decode("utf-8")
+    pattern = re.compile(r'<p class="hex">([0-9A-F ]+)</p>')
+    assert pattern.findall(first) == pattern.findall(second)
+    assert len(pattern.findall(first)) == 3
 
 
 def test_html_escapes_identifiers(bank: Bank, keyring: Keyring) -> None:
@@ -86,10 +134,13 @@ def test_explicit_pdf_renders_a_pdf(bank: Bank, user: User, keyring: Keyring) ->
     assert result.content.startswith(b"%PDF")
 
 
-def test_pdf_letter_fits_on_a_single_page(bank: Bank, user: User, keyring: Keyring) -> None:
+def test_pdf_renders_the_ini_and_hia_letters_on_separate_pages(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
     pytest.importorskip("reportlab")
     content = letter.make_ini_letter(bank, user, keyring, output_format=OutputFormat.PDF).content
-    assert re.findall(rb"/Count (\d+)", content) == [b"1"]
+    # One page per letter: INI and HIA.
+    assert re.findall(rb"/Count (\d+)", content) == [b"2"]
 
 
 def test_html_shows_the_default_branding(bank: Bank, user: User, keyring: Keyring) -> None:

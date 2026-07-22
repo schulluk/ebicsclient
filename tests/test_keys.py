@@ -124,3 +124,55 @@ def test_self_signed_certificate_wraps_the_public_key(keyring: Keyring) -> None:
     key_usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
     assert key_usage.content_commitment
     assert not key_usage.digital_signature
+
+
+def test_self_signed_certificates_are_deterministic(keyring: Keyring) -> None:
+    # The EBICS 3.0 initialisation letters print the SHA-256 of the certificate's DER, and
+    # the bank compares it against the certificate INI/HIA transmitted — possibly sessions
+    # earlier. Regeneration must therefore be byte-identical from the keyring alone.
+    from cryptography.hazmat.primitives.serialization import Encoding
+
+    first = keys.generate_self_signed_certificate(
+        keyring.signature, "USER1", keys.CertificateUsage.SIGNATURE
+    )
+    second = keys.generate_self_signed_certificate(
+        keyring.signature, "USER1", keys.CertificateUsage.SIGNATURE
+    )
+    assert first.public_bytes(Encoding.DER) == second.public_bytes(Encoding.DER)
+    assert keys.certificate_fingerprint(first) == keys.certificate_fingerprint(second)
+
+
+def test_self_signed_certificates_differ_per_key_and_usage(keyring: Keyring) -> None:
+    signature = keys.generate_self_signed_certificate(
+        keyring.signature, "USER1", keys.CertificateUsage.SIGNATURE
+    )
+    authentication = keys.generate_self_signed_certificate(
+        keyring.authentication, "USER1", keys.CertificateUsage.AUTHENTICATION
+    )
+    assert signature.serial_number != authentication.serial_number
+    assert keys.certificate_fingerprint(signature) != keys.certificate_fingerprint(
+        authentication
+    )
+
+
+def test_self_signed_certificate_validity_is_fixed_and_unlimited(keyring: Keyring) -> None:
+    # Fixed dates are what make regeneration deterministic; the Swiss Market Practice
+    # Guidelines (section 6.1) explicitly allow unlimited validity (9999-12-31).
+    certificate = keys.generate_self_signed_certificate(
+        keyring.encryption, "USER1", keys.CertificateUsage.ENCRYPTION
+    )
+    assert certificate.not_valid_before_utc.year == 2020
+    assert certificate.not_valid_after_utc.year == 9999
+    assert 0 < certificate.serial_number < 2**160  # RFC 5280: positive, at most 20 octets
+
+
+def test_certificate_fingerprint_is_sha256_over_der(keyring: Keyring) -> None:
+    import hashlib
+
+    from cryptography.hazmat.primitives.serialization import Encoding
+
+    certificate = keys.generate_self_signed_certificate(
+        keyring.signature, "USER1", keys.CertificateUsage.SIGNATURE
+    )
+    expected = hashlib.sha256(certificate.public_bytes(Encoding.DER)).digest()
+    assert keys.certificate_fingerprint(certificate) == expected

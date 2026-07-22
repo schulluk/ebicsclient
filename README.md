@@ -6,8 +6,9 @@ validated live against Zürcher Kantonalbank (ZKB).
 **What it provides today:**
 
 - **Key ceremony** — INI/HIA/HPB with X.509 key transmission (self-signed *mit Schlüsseln* or
-  CA-issued *mit Zertifikaten*), the printable initialisation letter (HTML/PDF), and bank-key
-  **pinning** across sessions
+  CA-issued *mit Zertifikaten*), the printable EBICS 3.0 initialisation letters (INI + HIA,
+  HTML/PDF, carrying the certificates and their SHA-256 DER fingerprints per spec 4.4.1.2.3),
+  and bank-key **pinning** across sessions
 - **Read** — statement/report downloads with parsers into typed models: **camt.053** end-of-day
   statements, **camt.052** intraday reports, **camt.054** booking advices (incl. QRR/SCOR/LSV),
   and **pain.002** payment status reports
@@ -119,8 +120,12 @@ a real bank statement.
 - [x] Authentication signature (inclusive Canonical XML 1.0 + RSA-SHA256)
 - [x] HTTPS transport (TLS 1.2 floor, certifi fallback via the optional `tls` extra)
 - [x] INI/HIA/HPB handshake
-- [x] X.509 key transmission: **mit Schlüsseln** (self-signed) and **mit Zertifikaten** (CA certs)
-- [x] Initialisation letter (HTML, or PDF via the optional `pdf` extra)
+- [x] X.509 key transmission: **mit Schlüsseln** (self-signed, deterministic certificates) and
+      **mit Zertifikaten** (CA certs)
+- [x] Initialisation letters (INI + HIA) with certificate SHA-256 DER fingerprints per the
+      EBICS 3.0 spec (HTML, or PDF via the optional `pdf` extra)
+- [ ] Production activation on the printed letters (in progress — the pre-1.4.0 letter carried
+      the EBICS 2.x public-key hash, which banks no longer match; see the 1.4.0 notes)
 - [x] Bank-key pinning across sessions (`hpb(pinned=...)`)
 
 **Milestone 2 — Read** (validated live on ZKB)
