@@ -31,6 +31,22 @@ activation PIN**.
 Steps 1–4 (up to printing the letters) can be built and tested **without** waiting on ZKB — do them
 against the test platform first. Step 5 onward needs ZKB to have activated you.
 
+### Re-initialisation (changed keys or certificates)
+
+Once INI/HIA have been accepted, the subscriber is in the *Initialised* state and the bank
+**rejects a re-run with `091002`** (the client reports `ALREADY_INITIALISED` and the new
+certificates are **not** transmitted). If the keyring or certificate generation changed after a
+first INI/HIA (key rotation, client upgrade), the letters will show hashes the bank cannot match
+— observed live as ZKB error **17104 "Der Hashwert … ist nicht korrekt"** on all three keys. The
+sequence must be:
+
+1. Have ZKB **delete the active initialisation** (reset the subscriber).
+2. Re-run `ini()` and `hia()` and **confirm both return `SUBMITTED`** — an
+   `ALREADY_INITIALISED` here means the reset has not taken effect and the certificates were
+   not delivered; stop and clarify with ZKB before printing anything.
+3. Print `make_ini_letter()`, sign both pages, send. With the deterministic certificates the
+   fingerprints are stable across sessions, so re-printed letters carry the same hashes.
+
 ## Order types / BTF (ZKB Bankparameterdaten)
 
 - **Submission** (key mgmt): `HCA`, `HCS`, `HIA`, `INI`, `PUB`, `SPR`.

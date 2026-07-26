@@ -129,6 +129,15 @@ class Client:
         (return code ``091002``), which is reported as ``ALREADY_INITIALISED`` rather than
         raised.
 
+        .. warning::
+            ``ALREADY_INITIALISED`` means the bank did **not** receive this run's
+            certificate — it kept whatever an earlier INI delivered. If the keyring or
+            the certificates changed since then (a key rotation, a client upgrade), the
+            initialisation letter will not match what the bank holds and activation will
+            fail: have the bank delete/reset the subscriber's initialisation first, then
+            re-run INI and HIA and confirm both return ``SUBMITTED`` before printing the
+            letters.
+
         Returns:
             Whether the key was newly submitted or the subscriber was already initialised.
 
@@ -146,7 +155,9 @@ class Client:
     def hia(self) -> InitializationState:
         """Send HIA — submit the authentication (X002) and encryption (E002) public keys.
 
-        Idempotent in the same way as :meth:`ini`.
+        Idempotent in the same way as :meth:`ini` — and with the same warning:
+        ``ALREADY_INITIALISED`` means the bank kept its previously received certificates,
+        so a changed keyring requires a bank-side reset before the re-run.
 
         Returns:
             Whether the keys were newly submitted or the subscriber was already initialised.
@@ -169,8 +180,16 @@ class Client:
             h005.raise_for_return_code(self._transport.post(request))
         except ReturnCodeError as error:
             if error.code == _SUBSCRIBER_STATE_INADMISSIBLE:
-                logger.info(
-                    "%s: subscriber %s already initialised — %s",
+                # Benign ONLY when re-sending the same keys. The bank's response is
+                # identical when the keyring changed since the first submission — in that
+                # case the new certificates were silently NOT delivered and the letters
+                # will not match (observed live: bank error 17104 on activation). The
+                # response carries no way to distinguish the two, so warn loudly.
+                logger.warning(
+                    "%s: subscriber %s already initialised — the bank KEPT its previously "
+                    "received certificates and this run's were NOT delivered (%s). If the "
+                    "keyring or certificates changed since the first submission, have the "
+                    "bank reset the initialisation and re-run until this returns SUBMITTED.",
                     order,
                     self._user.user_id,
                     error.text,
