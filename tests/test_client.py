@@ -327,30 +327,58 @@ def _camt053_zip_with_booking_date(booking_date: str) -> bytes:
 _JUNE = DateRange(datetime.date(2026, 6, 1), datetime.date(2026, 6, 30))
 
 
-def test_dated_download_accepts_in_range_data_and_consumes_it(
-    keyring: Keyring, bank_keyring: Keyring
+@pytest.mark.parametrize(
+    ("booking", "accepted"),
+    [
+        ("2026-05-31", False),  # day before start → rejected
+        ("2026-06-01", True),   # start — INCLUSIVE, accepted
+        ("2026-06-15", True),   # mid-range
+        ("2026-06-30", True),   # end (B) — INCLUSIVE, accepted (the "is B included?" case)
+        ("2026-07-01", False),  # day after end → rejected
+    ],
+)
+def test_dated_download_bounds_are_inclusive_on_both_ends(
+    booking: str, accepted: bool, keyring: Keyring, bank_keyring: Keyring
 ) -> None:
+    # DateRange is inclusive of Start and End (EBICS DateRangeType); pin the exact edges so a
+    # `<=`→`<` slip on either bound is caught. An accepted download is consumed (positive
+    # receipt); a rejected one fails closed and is NOT consumed (negative receipt).
     responses = make_download_responses(
-        keyring, _camt053_zip_with_booking_date("2026-06-15"), bank_keyring=bank_keyring
+        keyring, _camt053_zip_with_booking_date(booking), bank_keyring=bank_keyring
     )
     client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
-    (statement,) = client.download_statements(date_range=_JUNE)
-    assert statement.identification == "STMT-1"
-    assert _receipt_code(transport.posts[-1]) == "0"  # in range → positive, consumed
+    if accepted:
+        assert len(client.download_statements(date_range=_JUNE)) == 1
+        assert _receipt_code(transport.posts[-1]) == "0"
+    else:
+        with pytest.raises(DateRangeMismatchError):
+            client.download_statements(date_range=_JUNE)
+        assert _receipt_code(transport.posts[-1]) == "1"
 
 
-def test_dated_download_rejects_out_of_range_data_without_consuming(
+def test_dated_download_is_date_only_and_ignores_time_of_day(
     keyring: Keyring, bank_keyring: Keyring
 ) -> None:
-    # The bank ignored the DateRange and served July data for a June request: the client
-    # must NOT let it be consumed (that is the data-loss scenario) and must fail closed.
-    responses = make_download_responses(
-        keyring, _camt053_zip_with_booking_date("2026-07-15"), bank_keyring=bank_keyring
+    # An entry timestamped early on the start day (a <DtTm>, not a bare <Dt>) is still that
+    # calendar date: the range is date-only (DateRange rejects datetimes; camt DtTm is
+    # truncated to its date), so "same day but earlier" is included, never excluded.
+    document = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.08"><BkToCstmrStmt>'
+        b"<Stmt><Id>STMT-1</Id>"
+        b"<Acct><Id><IBAN>CH9300762011623852957</IBAN></Id></Acct>"
+        b'<Ntry><Amt Ccy="CHF">10.00</Amt><CdtDbtInd>CRDT</CdtDbtInd>'
+        b"<Sts><Cd>BOOK</Cd></Sts>"
+        b"<BookgDt><DtTm>2026-06-01T00:01:00</DtTm></BookgDt></Ntry>"
+        b"</Stmt></BkToCstmrStmt></Document>"
     )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("statement.xml", document)
+    responses = make_download_responses(keyring, buffer.getvalue(), bank_keyring=bank_keyring)
     client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
-    with pytest.raises(DateRangeMismatchError):
-        client.download_statements(date_range=_JUNE)
-    assert _receipt_code(transport.posts[-1]) == "1"  # out of range → negative, preserved
+    assert len(client.download_statements(date_range=_JUNE)) == 1
+    assert _receipt_code(transport.posts[-1]) == "0"  # start-day, early time → included
 
 
 def _upload_response(
