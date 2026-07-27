@@ -26,6 +26,14 @@ activation PIN**.
    [doc 07](07-handshake-testing.md) for the end-to-end test walkthrough.
 5. **HPB** — download ZKB's public keys and **verify them against the hashes printed on p.2 of the
    Bankparameterdaten letter** (in `../local/`).
+
+   > **Note — ZKB publishes the same X002 and E002 hash in the plain-keys profile.** In the
+   > "mit Schlüsseln" profile ZKB reuses one key pair for authentication and encryption, so the
+   > Bankparameterdaten letter prints an *identical* SHA-256 hash for both X002 and E002 (the
+   > "mit Zertifikaten" profile lists two different ones). Identical bank-key hashes are therefore
+   > **expected here, not a bug**. `bank_key_hashes()` still hashes the two keys independently
+   > (from the separate `AuthenticationPubKeyInfo`/`EncryptionPubKeyInfo` in the HPB response), so
+   > pinning validates each; they simply coincide because the underlying key is the same.
 6. **Download** statements via the `EOP/camt.053.001.08` BTF.
 
 Steps 1–4 (up to printing the letters) can be built and tested **without** waiting on ZKB — do them

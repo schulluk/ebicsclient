@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from ebicsclient import keys
 from ebicsclient.errors import KeyringDecryptionError, KeyringError, KeyringFormatError
-from ebicsclient.models import Keyring
+from ebicsclient.models import BankKeys, Keyring
 
 _PASSPHRASE = "correct horse battery staple"
 
@@ -110,6 +110,23 @@ def test_save_and_load_keyring_round_trip_through_a_file(keyring: Keyring, tmp_p
 def test_load_keyring_from_a_missing_file_raises(tmp_path: Path) -> None:
     with pytest.raises(KeyringError):
         keys.load_keyring(tmp_path / "does-not-exist.json", passphrase=_PASSPHRASE)
+
+
+def test_bank_key_hashes_are_derived_independently_per_key() -> None:
+    # Guard the pinning property: the X002 and E002 hashes are computed from two SEPARATE
+    # keys, not both from one. With two distinct bank keys the hashes must differ and each
+    # must equal public_key_hash of its own key. (A bank may genuinely reuse one key for
+    # both — e.g. ZKB's plain-keys profile — in which case identical hashes are expected,
+    # not a bug; see docs/05.)
+    bank = keys.generate_keyring()  # three independent keys
+    bank_keys = BankKeys(
+        authentication=bank.authentication.public_key(),
+        encryption=bank.encryption.public_key(),
+    )
+    hashes = keys.bank_key_hashes(bank_keys)
+    assert hashes.authentication == keys.public_key_hash(bank_keys.authentication)
+    assert hashes.encryption == keys.public_key_hash(bank_keys.encryption)
+    assert hashes.authentication != hashes.encryption  # distinct keys → distinct hashes
 
 
 def test_self_signed_certificate_wraps_the_public_key(keyring: Keyring) -> None:
