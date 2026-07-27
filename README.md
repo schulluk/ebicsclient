@@ -42,7 +42,7 @@ transaction_id = client.upload(PAIN_001, pain001_bytes)
 ```
 
 The certificate-based (*mit Zertifikaten*) profile is a constructor option — see
-[docs/11-certificate-profiles.md](docs/11-certificate-profiles.md).
+[docs/11-certificate-profiles.md](https://github.com/schulluk/ebicsclient/blob/main/docs/11-certificate-profiles.md).
 
 > ### ⚠️ Loading EBICS identifiers from a config file? Quote them.
 >
@@ -61,7 +61,7 @@ Python (`cryptography`, `lxml`), no PHP/Java sidecar. Not yet built: multi-perso
 (EDS/VEU), key rotation, and several administrative order types.
 
 Full capability-by-capability coverage, gaps, and verification status:
-**[docs/13-standard-conformance.md](docs/13-standard-conformance.md)**.
+**[docs/13-standard-conformance.md](https://github.com/schulluk/ebicsclient/blob/main/docs/13-standard-conformance.md)**.
 
 ## Why this exists
 
@@ -69,43 +69,44 @@ It was built for [WealthTracker](https://github.com/schulluk/WealthTracker), whi
 bank statements over EBICS — and no pure-Python client for EBICS 3.0 (H005) existed to build on.
 Rather than shell out to a PHP/Java sidecar or a proprietary dependency, ebicsclient is a clean,
 reusable library that any application can embed. See
-[docs/03-library-landscape.md](docs/03-library-landscape.md) for the existing options and the gap.
+[docs/03-library-landscape.md](https://github.com/schulluk/ebicsclient/blob/main/docs/03-library-landscape.md) for the existing options and the gap.
 
 ## Why only EBICS 3.0 (H005)?
 
 By design. EBICS access now requires **H005** (the pre-3.0 protocol was retired ~Nov 2025), and
 the ISO 20022 "2009" message vintage retires **21 Nov 2026** — so supporting legacy versions
 would be building for the past. The `protocol/` layer is seamed for a *future* EBICS version, not
-older ones. The regulatory deadlines are in [docs/01](docs/01-protocol-and-formats.md); the scope
-decision in [docs/04](docs/04-implementation-plan.md).
+older ones. The regulatory deadlines are in [docs/01](https://github.com/schulluk/ebicsclient/blob/main/docs/01-protocol-and-formats.md); the scope
+decision in [docs/04](https://github.com/schulluk/ebicsclient/blob/main/docs/04-implementation-plan.md).
 
 ## Documentation
 
 | Doc | Contents |
 |---|---|
-| [docs/01-protocol-and-formats.md](docs/01-protocol-and-formats.md) | EBICS/H005 background, the two regulatory deadlines, message formats |
-| [docs/02-licensing-strategy.md](docs/02-licensing-strategy.md) | Dual-licensing plan, legal reasoning, reimplementation |
-| [docs/03-library-landscape.md](docs/03-library-landscape.md) | Existing EBICS libraries and the gap this library fills |
-| [docs/04-implementation-plan.md](docs/04-implementation-plan.md) | Scope, modules, the two hard parts, build order, test strategy |
-| [docs/05-zkb-onboarding.md](docs/05-zkb-onboarding.md) | The INI/HIA + signed-letter ceremony, re-initialisation, ZKB order params |
-| [docs/06-engineering-conventions.md](docs/06-engineering-conventions.md) | Baseline practices: layout, logging, errors, security, typing, testing, CI |
-| [docs/07-handshake-testing.md](docs/07-handshake-testing.md) | Validating INI/HIA/HPB + download/upload against the ZKB test platform |
-| [docs/08-parity-and-xsd-findings.md](docs/08-parity-and-xsd-findings.md) | The inclusive-vs-exclusive c14n correction and verification discipline |
-| [docs/09-zkb-test-platform-settings.md](docs/09-zkb-test-platform-settings.md) | What the ZKB test platform exposes, and its upload/simulation model |
-| [docs/10-btf-order-types.md](docs/10-btf-order-types.md) | ZKB's EBICS order-type → H005 BTF catalogue |
-| [docs/11-certificate-profiles.md](docs/11-certificate-profiles.md) | "mit Schlüsseln" vs "mit Zertifikaten", and the certificate seam |
-| [docs/12-verification-ledger.md](docs/12-verification-ledger.md) | Every protocol claim → spec citation → oracle → status; the 2.5→3.0 audit |
-| [docs/13-standard-conformance.md](docs/13-standard-conformance.md) | Coverage & gaps: every H005 order type — supported or not, and how far verified |
+| [docs/01-protocol-and-formats.md](https://github.com/schulluk/ebicsclient/blob/main/docs/01-protocol-and-formats.md) | EBICS/H005 background, the two regulatory deadlines, message formats |
+| [docs/02-licensing-strategy.md](https://github.com/schulluk/ebicsclient/blob/main/docs/02-licensing-strategy.md) | Dual-licensing plan, legal reasoning, reimplementation |
+| [docs/03-library-landscape.md](https://github.com/schulluk/ebicsclient/blob/main/docs/03-library-landscape.md) | Existing EBICS libraries and the gap this library fills |
+| [docs/04-implementation-plan.md](https://github.com/schulluk/ebicsclient/blob/main/docs/04-implementation-plan.md) | Scope, modules, the two hard parts, build order, test strategy |
+| [docs/05-zkb-onboarding.md](https://github.com/schulluk/ebicsclient/blob/main/docs/05-zkb-onboarding.md) | The INI/HIA + signed-letter ceremony, re-initialisation, ZKB order params |
+| [docs/06-engineering-conventions.md](https://github.com/schulluk/ebicsclient/blob/main/docs/06-engineering-conventions.md) | Baseline practices: layout, logging, errors, security, typing, testing, CI |
+| [docs/07-handshake-testing.md](https://github.com/schulluk/ebicsclient/blob/main/docs/07-handshake-testing.md) | Validating INI/HIA/HPB + download/upload against the ZKB test platform |
+| [docs/08-parity-and-xsd-findings.md](https://github.com/schulluk/ebicsclient/blob/main/docs/08-parity-and-xsd-findings.md) | The inclusive-vs-exclusive c14n correction and verification discipline |
+| [docs/09-zkb-test-platform-settings.md](https://github.com/schulluk/ebicsclient/blob/main/docs/09-zkb-test-platform-settings.md) | What the ZKB test platform exposes, and its upload/simulation model |
+| [docs/10-btf-order-types.md](https://github.com/schulluk/ebicsclient/blob/main/docs/10-btf-order-types.md) | ZKB's EBICS order-type → H005 BTF catalogue |
+| [docs/11-certificate-profiles.md](https://github.com/schulluk/ebicsclient/blob/main/docs/11-certificate-profiles.md) | "mit Schlüsseln" vs "mit Zertifikaten", and the certificate seam |
+| [docs/12-verification-ledger.md](https://github.com/schulluk/ebicsclient/blob/main/docs/12-verification-ledger.md) | Every protocol claim → spec citation → oracle → status; the 2.5→3.0 audit |
+| [docs/13-standard-conformance.md](https://github.com/schulluk/ebicsclient/blob/main/docs/13-standard-conformance.md) | Coverage & gaps: every H005 order type — supported or not, and how far verified |
 
 ## Development
 
-Contributors: see [CONTRIBUTING.md](CONTRIBUTING.md). One-command setup with `uv`:
+Contributors: see [CONTRIBUTING.md](https://github.com/schulluk/ebicsclient/blob/main/CONTRIBUTING.md). One-command setup with `uv`:
 `git clone https://github.com/schulluk/ebicsclient && cd ebicsclient && uv sync --all-groups`
 (or `pip install -e . --group dev` on pip ≥ 25.1). This is a money-moving library — the
-engineering bar is [docs/06-engineering-conventions.md](docs/06-engineering-conventions.md).
+engineering bar is [docs/06-engineering-conventions.md](https://github.com/schulluk/ebicsclient/blob/main/docs/06-engineering-conventions.md).
 
 ## License
 
 Source-available under the **PolyForm Noncommercial License 1.0.0** — **free for noncommercial
-use**; commercial/business use requires a paid license. See [LICENSE.md](LICENSE.md) and the
-rationale in [docs/02-licensing-strategy.md](docs/02-licensing-strategy.md).
+use**; commercial/business use requires a paid license. See
+[LICENSE.md](https://github.com/schulluk/ebicsclient/blob/main/LICENSE.md) and the
+rationale in [docs/02-licensing-strategy.md](https://github.com/schulluk/ebicsclient/blob/main/docs/02-licensing-strategy.md).
