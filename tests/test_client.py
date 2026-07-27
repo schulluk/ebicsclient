@@ -1,5 +1,6 @@
 """Tests for ebicsclient.client: INI/HIA orchestration with a fake transport."""
 
+import datetime
 import io
 import zipfile
 from decimal import Decimal
@@ -14,6 +15,8 @@ from ebicsclient.client import Client
 from ebicsclient.errors import (
     BankKeyMismatchError,
     ClientStateError,
+    CryptoError,
+    DateRangeMismatchError,
     ResponseAuthenticationError,
     ReturnCodeError,
 )
@@ -22,9 +25,11 @@ from ebicsclient.models import (
     PAIN_001,
     Bank,
     BankKeys,
+    DateRange,
     InitializationState,
     Keyring,
     OutputFormat,
+    ReceiptPolicy,
     User,
 )
 
@@ -177,6 +182,66 @@ def test_download_returns_the_decrypted_order_data_single_segment(
     assert opened.findtext(f".//{{{_NS}}}ServiceName") == "EOP"
 
 
+def _receipt_code(post: bytes) -> str | None:
+    return etree.fromstring(post).findtext(f".//{{{_NS}}}ReceiptCode")
+
+
+def test_default_download_sends_a_positive_receipt(keyring: Keyring, bank_keyring: Keyring) -> None:
+    responses = make_download_responses(
+        keyring, b"<Document/>", bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    client.download(CAMT_053)
+    # The last post is the receipt; ReceiptCode 0 = positive (consume).
+    assert _receipt_code(transport.posts[-1]) == "0"
+
+
+def test_keep_policy_sends_a_negative_receipt_but_returns_the_data(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    order_data = b"<Document>peek</Document>"
+    responses = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    # KEEP: the caller reads the data but the bank must not consume it.
+    assert client.download(CAMT_053, receipt_policy=ReceiptPolicy.KEEP) == order_data
+    assert _receipt_code(transport.posts[-1]) == "1"  # negative = keep
+
+
+def test_a_validation_failure_sends_a_negative_receipt_and_raises(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    responses = make_download_responses(
+        keyring, b"<Document/>", bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+
+    def _reject(_data: bytes) -> None:
+        raise ValueError("nope")
+
+    with pytest.raises(ValueError):
+        client.download(CAMT_053, validate=_reject)
+    # Data must NOT be consumed when validation fails: a negative receipt was sent.
+    assert _receipt_code(transport.posts[-1]) == "1"
+
+
+def test_a_decrypt_failure_sends_a_negative_receipt_and_raises(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # Encrypt the data to a DIFFERENT subscriber key than the client holds, so RSA-unwrap of
+    # the transaction key fails. The data must not be consumed — this is the pre-existing
+    # data-loss bug (positive-ack-before-decrypt) the reorder fixes.
+    other_keyring = keys.generate_keyring()
+    responses = make_download_responses(
+        other_keyring, b"<Document/>", bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(CryptoError):
+        client.download(CAMT_053)
+    assert _receipt_code(transport.posts[-1]) == "1"  # negative = data preserved
+
+
 def test_download_reassembles_multiple_segments(keyring: Keyring, bank_keyring: Keyring) -> None:
     order_data = b"<Document>" + b"x" * 5000 + b"</Document>"
     responses = make_download_responses(
@@ -240,6 +305,52 @@ def test_download_statements_parses_a_camt053_zip(keyring: Keyring, bank_keyring
     assert statement.identification == "STMT-1"
     assert statement.closing_balance is not None
     assert statement.closing_balance.amount == Decimal("42.00")
+
+
+def _camt053_zip_with_booking_date(booking_date: str) -> bytes:
+    document = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.08"><BkToCstmrStmt>'
+        b"<Stmt><Id>STMT-1</Id>"
+        b"<Acct><Id><IBAN>CH9300762011623852957</IBAN></Id></Acct>"
+        b'<Ntry><Amt Ccy="CHF">10.00</Amt><CdtDbtInd>CRDT</CdtDbtInd>'
+        b"<Sts><Cd>BOOK</Cd></Sts>"
+        b"<BookgDt><Dt>" + booking_date.encode("ascii") + b"</Dt></BookgDt></Ntry>"
+        b"</Stmt></BkToCstmrStmt></Document>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("statement.xml", document)
+    return buffer.getvalue()
+
+
+_JUNE = DateRange(datetime.date(2026, 6, 1), datetime.date(2026, 6, 30))
+
+
+def test_dated_download_accepts_in_range_data_and_consumes_it(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    responses = make_download_responses(
+        keyring, _camt053_zip_with_booking_date("2026-06-15"), bank_keyring=bank_keyring
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    (statement,) = client.download_statements(date_range=_JUNE)
+    assert statement.identification == "STMT-1"
+    assert _receipt_code(transport.posts[-1]) == "0"  # in range → positive, consumed
+
+
+def test_dated_download_rejects_out_of_range_data_without_consuming(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # The bank ignored the DateRange and served July data for a June request: the client
+    # must NOT let it be consumed (that is the data-loss scenario) and must fail closed.
+    responses = make_download_responses(
+        keyring, _camt053_zip_with_booking_date("2026-07-15"), bank_keyring=bank_keyring
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(DateRangeMismatchError):
+        client.download_statements(date_range=_JUNE)
+    assert _receipt_code(transport.posts[-1]) == "1"  # out of range → negative, preserved
 
 
 def _upload_response(

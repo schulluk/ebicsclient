@@ -1,42 +1,14 @@
 # ebicsclient — a pure-Python EBICS 3.0 (H005) client
 
-A from-scratch, pure-Python client for the **EBICS** banking protocol (EBICS 3.0 / H005),
-validated live against Zürcher Kantonalbank (ZKB).
+A Python client for the **EBICS** banking protocol (EBICS 3.0 / H005):
+download statements and initiate payments over a single, source-available library. Validated
+live against Zürcher Kantonalbank (ZKB).
 
-**What it provides today:**
+## Install
 
-- **Key ceremony** — INI/HIA/HPB with X.509 key transmission (self-signed *mit Schlüsseln* or
-  CA-issued *mit Zertifikaten*), the printable EBICS 3.0 initialisation letters (INI + HIA,
-  HTML/PDF, carrying the certificates and their SHA-256 DER fingerprints per spec 4.4.1.2.3),
-  and bank-key **pinning** across sessions
-- **Read** — statement/report downloads with parsers into typed models: **camt.053** end-of-day
-  statements, **camt.052** intraday reports, **camt.054** booking advices (incl. QRR/SCOR/LSV),
-  and **pain.002** payment status reports
-- **Write** — **pain.001** payment submission (BTU) with the A006 electronic signature
-- **Security throughout** — the bank's `AuthSignature` is verified on **every** response, unknown
-  return codes are never masked, and everything fails closed
-- **Self-inspection** — `available_order_types()` (HAA) and `subscriber_info()` (HTD)
-
-**What is missing:** distributed signatures (EDS/VEU — multi-person payment approval; see
-milestone 7 below), and validation against banks beyond ZKB. Legacy EBICS versions (H004 and
-earlier) are deliberately unsupported.
-
-- **Stack:** Python 3.11+, just two runtime deps — `cryptography` (RSA/AES) and `lxml` (XML /
-  inclusive Canonical XML 1.0); everything else stdlib. No PHP/Java sidecar. (Rationale:
-  [docs/04-implementation-plan.md](docs/04-implementation-plan.md#dependencies).)
-- **License model:** source-available — **free for personal use, paid license for commercial/business use**
-  (see [docs/02-licensing-strategy.md](docs/02-licensing-strategy.md)).
-- **Reusable & app-agnostic:** designed to be embedded as a dependency in a downstream application,
-  not tied to any one consumer — a stable, reusable standard.
-
-## Why this exists
-
-EBICS access now requires **EBICS 3.0 / H005** (the pre-3.0 protocol was retired ~Nov 2025), and the
-ISO 20022 "2009" message vintage retires **21 Nov 2026** — so a client must speak H005 and consume
-**camt.053.001.08** (the 2019 vintage) and submit **pain.001.001.09** payments. There is no other
-pure-Python client for this. We build one, kept tightly scoped. EBICS is a stable, formally versioned
-standard, so a scoped client is **low ongoing maintenance** — the cost is upfront correctness. See
-[docs/03-library-landscape.md](docs/03-library-landscape.md) for the landscape.
+```console
+pip install ebicsclient          # add [pdf] for PDF letters, [tls] for the certifi CA bundle
+```
 
 ## Quickstart
 
@@ -69,21 +41,45 @@ for statement in client.download_statements():
 transaction_id = client.upload(PAIN_001, pain001_bytes)
 ```
 
-The **certificate-based ("mit Zertifikaten")** profile is a constructor option — see
+The certificate-based (*mit Zertifikaten*) profile is a constructor option — see
 [docs/11-certificate-profiles.md](docs/11-certificate-profiles.md).
 
 > ### ⚠️ Loading EBICS identifiers from a config file? Quote them.
 >
-> EBICS IDs **can** carry leading zeros (a real Partner ID may look like `00123456`), and
-> ISO message versions look like `"08"`. Unquoted in YAML/JSON/TOML these parse as **numbers** —
-> the wrong type *and* silently stripped of their zeros (PyYAML even reads all-octal-digit
-> values as octal). Since 1.3.1 the library rejects non-string values immediately with an
-> explanatory error, but the correct fix is always **quoting the value in your config**
-> (`partner_id: "00123456"`, `message_version: "08"`) — never wrapping the parsed number in
-> `str()`, which would keep the wrong, zero-stripped identifier and talk to the bank as the
-> wrong subscriber. The same applies to digits-only keyring passphrases.
+> EBICS IDs **can** carry leading zeros (a real Partner ID may look like `00123456`) and ISO
+> versions look like `"08"`. Unquoted in YAML/JSON/TOML these parse as **numbers** — the wrong
+> type *and* silently stripped of their zeros. Always quote them (`partner_id: "00123456"`); the
+> library rejects non-string values, but the fix is quoting, never `str()`-wrapping the parsed
+> number (which keeps the wrong, zero-stripped identifier). The same applies to numeric-looking
+> keyring passphrases.
 
-## Documentation index
+## What it does
+
+Key ceremony (INI/HIA/HPB), statement/report downloads (camt.053/052/054, pain.002) with optional
+dated ranges, and payment uploads (pain.001) — read and write validated live against ZKB. Pure
+Python (`cryptography`, `lxml`), no PHP/Java sidecar. Not yet built: multi-person signatures
+(EDS/VEU), key rotation, and several administrative order types.
+
+Full capability-by-capability coverage, gaps, and verification status:
+**[docs/13-standard-conformance.md](docs/13-standard-conformance.md)**.
+
+## Why this exists
+
+It was built for [WealthTracker](https://github.com/schulluk/WealthTracker), which needs to pull
+bank statements over EBICS — and no pure-Python client for EBICS 3.0 (H005) existed to build on.
+Rather than shell out to a PHP/Java sidecar or a proprietary dependency, ebicsclient is a clean,
+reusable library that any application can embed. See
+[docs/03-library-landscape.md](docs/03-library-landscape.md) for the existing options and the gap.
+
+## Why only EBICS 3.0 (H005)?
+
+By design. EBICS access now requires **H005** (the pre-3.0 protocol was retired ~Nov 2025), and
+the ISO 20022 "2009" message vintage retires **21 Nov 2026** — so supporting legacy versions
+would be building for the past. The `protocol/` layer is seamed for a *future* EBICS version, not
+older ones. The regulatory deadlines are in [docs/01](docs/01-protocol-and-formats.md); the scope
+decision in [docs/04](docs/04-implementation-plan.md).
+
+## Documentation
 
 | Doc | Contents |
 |---|---|
@@ -91,7 +87,7 @@ The **certificate-based ("mit Zertifikaten")** profile is a constructor option �
 | [docs/02-licensing-strategy.md](docs/02-licensing-strategy.md) | Dual-licensing plan, legal reasoning, reimplementation |
 | [docs/03-library-landscape.md](docs/03-library-landscape.md) | Existing EBICS libraries and the gap this library fills |
 | [docs/04-implementation-plan.md](docs/04-implementation-plan.md) | Scope, modules, the two hard parts, build order, test strategy |
-| [docs/05-zkb-onboarding.md](docs/05-zkb-onboarding.md) | The INI/HIA + signed-letter ceremony, ZKB BTF/order params |
+| [docs/05-zkb-onboarding.md](docs/05-zkb-onboarding.md) | The INI/HIA + signed-letter ceremony, re-initialisation, ZKB order params |
 | [docs/06-engineering-conventions.md](docs/06-engineering-conventions.md) | Baseline practices: layout, logging, errors, security, typing, testing, CI |
 | [docs/07-handshake-testing.md](docs/07-handshake-testing.md) | Validating INI/HIA/HPB + download/upload against the ZKB test platform |
 | [docs/08-parity-and-xsd-findings.md](docs/08-parity-and-xsd-findings.md) | The inclusive-vs-exclusive c14n correction and verification discipline |
@@ -99,88 +95,17 @@ The **certificate-based ("mit Zertifikaten")** profile is a constructor option �
 | [docs/10-btf-order-types.md](docs/10-btf-order-types.md) | ZKB's EBICS order-type → H005 BTF catalogue |
 | [docs/11-certificate-profiles.md](docs/11-certificate-profiles.md) | "mit Schlüsseln" vs "mit Zertifikaten", and the certificate seam |
 | [docs/12-verification-ledger.md](docs/12-verification-ledger.md) | Every protocol claim → spec citation → oracle → status; the 2.5→3.0 audit |
-| `../local/` (outside the repo) | Real ZKB connection credentials, kept in the workspace **outside** the repo — can't be committed |
+| [docs/13-standard-conformance.md](docs/13-standard-conformance.md) | Coverage & gaps: every H005 order type — supported or not, and how far verified |
 
 ## Development
 
 Contributors: see [CONTRIBUTING.md](CONTRIBUTING.md). One-command setup with `uv`:
 `git clone https://github.com/schulluk/ebicsclient && cd ebicsclient && uv sync --all-groups`
-(or `pip install -e . --group dev` on pip ≥ 25.1).
-This is a money-moving library — the engineering bar is [docs/06-engineering-conventions.md](docs/06-engineering-conventions.md).
-
-## Status
-
-**Read and write validated live against the ZKB test platform.** The key ceremony, the statement
-download path, and the payment upload (envelope, authentication signature, A006 electronic signature,
-and order-data encryption) are all accepted by the bank, and the camt.053 parser is validated against
-a real bank statement.
-
-**Milestone 1 — Key ceremony** (validated live on ZKB)
-
-- [x] Key generation + encrypted keyring, and EBICS public-key hashes
-- [x] Authentication signature (inclusive Canonical XML 1.0 + RSA-SHA256)
-- [x] HTTPS transport (TLS 1.2 floor, certifi fallback via the optional `tls` extra)
-- [x] INI/HIA/HPB handshake
-- [x] X.509 key transmission: **mit Schlüsseln** (self-signed, deterministic certificates) and
-      **mit Zertifikaten** (CA certs)
-- [x] Initialisation letters (INI + HIA) with certificate SHA-256 DER fingerprints per the
-      EBICS 3.0 spec (HTML, or PDF via the optional `pdf` extra)
-- [ ] Production activation on the printed letters (in progress — the pre-1.4.0 letter carried
-      the EBICS 2.x public-key hash, which banks no longer match; see the 1.4.0 notes)
-- [x] Bank-key pinning across sessions (`hpb(pinned=...)`)
-
-**Milestone 2 — Read** (validated live on ZKB)
-
-- [x] Order-data decryption (RSA-unwrap + AES-128-CBC)
-- [x] Statement download — `EOP/camt.053` BTD transaction (initialise → transfer → receipt)
-- [x] camt.053 parsing (balances + entries) — validated on a real ZKB statement
-
-**Milestone 3 — Write** (validated live on ZKB)
-
-- [x] Order-data encryption and the A006 electronic signature (RSASSA-PSS)
-- [x] Payment upload — `MCT/pain.001` BTU transaction — accepted live
-
-**Milestone 4 — Verification & release**
-
-- [x] Exception model with retryability classification
-- [x] Offline verification: H005 XSD validation, C14N golden vectors, ebics-client-php parity
-- [x] Golden regression fixture from a real ZKB statement
-- [x] CI (ruff / mypy --strict / pytest) and tag-triggered PyPI releases (Trusted Publishing)
-
-**Milestone 5 — Message formats** (parsers built against genuine ZKB messages)
-
-- [x] pain.002 status-report parser (group / payment / transaction statuses, reason codes)
-- [x] camt.052 intraday reports
-- [x] camt.054 booking advices (incl. the QRR / SCOR / LSV variants via `service_option`)
-
-**Milestone 6 — Protocol hardening & conveniences**
-
-- [x] Verify the bank's `AuthSignature` on every response — validated live on ZKB
-- [x] Subscriber self-inspection — `available_order_types()` (HAA) and `subscriber_info()` (HTD)
-
-**Milestone 7 — Distributed signatures (EDS/VEU)** (next; parked until validatable)
-
-EDS (*Elektronische Verteilte Unterschrift*) is EBICS's workflow for orders that need
-**multiple people to sign before the bank executes them** — dual control on payments. An order
-is uploaded with `requestEDS` and parks in the bank's VEU queue; further signatories list the
-queue, inspect the order, and deliver their A006 signatures until the configured quorum (e.g.
-first + second signature) is reached. The building blocks (A006 signing, the `SignatureFlag`,
-the admin-download transaction pattern) are in place; what is missing is a **validatable
-multi-user setup** — the ZKB test subscriber is single-user with `NumSigRequired=0`, so the
-workflow cannot be exercised there. This milestone starts when a downstream setup with a real
-multi-signature profile exists.
-
-- [ ] Upload into the VEU queue (`SignatureFlag` with `requestEDS`)
-- [ ] List pending orders (HVU/HVZ) and fetch order details (HVD) and transactions (HVT)
-- [ ] Deliver an additional signature (HVE) and cancel a pending order (HVS)
-- [ ] Validate the full quorum workflow against a multi-signature bank profile
-
-This client is **EBICS 3.0 (H005) only** — legacy versions (H004 and earlier) will not be
-supported (see [docs/04](docs/04-implementation-plan.md)); the `protocol/` seam exists for a
-future EBICS version, not for the past.
+(or `pip install -e . --group dev` on pip ≥ 25.1). This is a money-moving library — the
+engineering bar is [docs/06-engineering-conventions.md](docs/06-engineering-conventions.md).
 
 ## License
 
-Source-available under the **PolyForm Noncommercial License 1.0.0** — **free for noncommercial use**;
-commercial/business use requires a paid license. See [LICENSE.md](LICENSE.md) and the rationale in
-[docs/02-licensing-strategy.md](docs/02-licensing-strategy.md).
+Source-available under the **PolyForm Noncommercial License 1.0.0** — **free for noncommercial
+use**; commercial/business use requires a paid license. See [LICENSE.md](LICENSE.md) and the
+rationale in [docs/02-licensing-strategy.md](docs/02-licensing-strategy.md).

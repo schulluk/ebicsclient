@@ -64,4 +64,4 @@ Both order-data payloads now validate against `ebics_signature_S002.xsd` and
 The self-signed certificate's subject/validity and ZKB's exact "mit Schlüsseln"
 expectation still need confirmation on the ZKB test platform; the *structure* is
 XSD-valid. The canonicalisation, envelopes, and order-data schemas are all verified
-offline — the test platform is the final end-to-end check (see docs/07).
+offline — the test platform is the final end-to-end check (see [docs/07](07-handshake-testing.md)).

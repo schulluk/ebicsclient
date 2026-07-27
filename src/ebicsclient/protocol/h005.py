@@ -39,6 +39,7 @@ from ebicsclient.models import (
     Bank,
     BankKeys,
     BusinessTransactionFormat,
+    DateRange,
     DownloadInitialisation,
     DownloadSegment,
     Keyring,
@@ -68,9 +69,11 @@ _SIGNATURE_FLAG = "true"
 _MAX_SEGMENT_CHARS = 1_000_000
 _SECURITY_MEDIUM = "0000"
 _OK_RETURN_CODE = "000000"
-# The bank acknowledges a positive download receipt with 011000
-# EBICS_DOWNLOAD_POSTPROCESS_DONE — a success code, not an error (validated live on ZKB).
-_RECEIPT_OK_CODES = frozenset({"000000", "011000"})
+# The bank confirms a receipt with a postprocess code: 011000 EBICS_DOWNLOAD_POSTPROCESS_DONE
+# for a positive acknowledgement (validated live on ZKB), 011001 EBICS_DOWNLOAD_POSTPROCESS_SKIPPED
+# for a negative one (spec 5.6.1.2.2). Both confirm the receipt was accepted — the polarity is
+# set by what the client sent, not by which code comes back — so both count as success here.
+_RECEIPT_OK_CODES = frozenset({"000000", "011000", "011001"})
 
 # Return codes whose meaning this client has verified — from live ZKB responses (the bank's
 # own ReportText names the code) or the EBICS specification. Which of them count as success
@@ -98,7 +101,8 @@ _SHA256_ALGORITHM = "http://www.w3.org/2001/04/xmlenc#sha256"
 _PHASE_INITIALISATION = "Initialisation"
 _PHASE_TRANSFER = "Transfer"
 _PHASE_RECEIPT = "Receipt"
-_RECEIPT_POSITIVE = "0"  # ReceiptCode acknowledging a successful download
+_RECEIPT_POSITIVE = "0"  # ReceiptCode acknowledging a successful download (bank may consume)
+_RECEIPT_NEGATIVE = "1"  # ReceiptCode declining — the bank keeps the data (spec 5.6.1.2.2)
 
 # EBICS algorithm-version labels for the three keys.
 _SIGNATURE_VERSION = "A006"
@@ -441,6 +445,7 @@ def build_download_initialisation_request(
     keyring: Keyring,
     bank_keys: BankKeys,
     btf: BusinessTransactionFormat,
+    date_range: DateRange | None = None,
 ) -> bytes:
     """Build the signed download-initialisation request (BTD, phase Initialisation).
 
@@ -455,12 +460,14 @@ def build_download_initialisation_request(
         keyring: The subscriber's key pairs (the X002 key signs the request).
         bank_keys: The bank's public keys (from HPB), digested into the request.
         btf: The Business Transaction Format to download (e.g. ``CAMT_053``).
+        date_range: An optional inclusive reporting period; when given, the request carries
+            the BTD ``DateRange`` parameter and the bank returns data for that period.
 
     Returns:
         The serialised, signed ``ebicsRequest`` XML.
     """
     return _download_initialisation_request(
-        bank, user, keyring, bank_keys, _ADMIN_ORDER_TYPE_BTD, btf
+        bank, user, keyring, bank_keys, _ADMIN_ORDER_TYPE_BTD, btf, date_range
     )
 
 
@@ -499,6 +506,7 @@ def _download_initialisation_request(
     bank_keys: BankKeys,
     admin_order_type: str,
     btf: BusinessTransactionFormat | None,
+    date_range: DateRange | None = None,
 ) -> bytes:
     root = etree.Element(etree.QName(NAMESPACE, "ebicsRequest"), nsmap=_NSMAP)
     root.set("Version", _PROTOCOL_VERSION)
@@ -515,7 +523,7 @@ def _download_initialisation_request(
     order_details = etree.SubElement(static, etree.QName(NAMESPACE, "OrderDetails"))
     _text(order_details, "AdminOrderType", admin_order_type)
     if btf is not None:
-        _append_btd_order_params(order_details, btf)
+        _append_btd_order_params(order_details, btf, date_range)
     else:
         etree.SubElement(order_details, etree.QName(NAMESPACE, "StandardOrderParams"))
     _append_bank_pub_key_digests(static, bank_keys)
@@ -529,7 +537,11 @@ def _download_initialisation_request(
     return _serialize(root)
 
 
-def _append_btd_order_params(order_details: etree._Element, btf: BusinessTransactionFormat) -> None:
+def _append_btd_order_params(
+    order_details: etree._Element,
+    btf: BusinessTransactionFormat,
+    date_range: DateRange | None = None,
+) -> None:
     params = etree.SubElement(order_details, etree.QName(NAMESPACE, "BTDOrderParams"))
     service = etree.SubElement(params, etree.QName(NAMESPACE, "Service"))
     # RestrictedServiceType order: ServiceName, Scope?, ServiceOption?, Container?, MsgName.
@@ -544,6 +556,12 @@ def _append_btd_order_params(order_details: etree._Element, btf: BusinessTransac
     message = _text(service, "MsgName", btf.message_name)
     if btf.message_version is not None:
         message.set("version", btf.message_version)
+    # BTDParamsType sequence: Service, DateRange?, Parameter* — so DateRange follows the
+    # whole <Service> element. Both bounds are inclusive ISO dates (DateRangeType).
+    if date_range is not None:
+        date_range_element = etree.SubElement(params, etree.QName(NAMESPACE, "DateRange"))
+        _text(date_range_element, "Start", date_range.start.isoformat())
+        _text(date_range_element, "End", date_range.end.isoformat())
 
 
 def _append_bank_pub_key_digests(static: etree._Element, bank_keys: BankKeys) -> None:
@@ -588,13 +606,21 @@ def build_download_transfer_request(
     return _serialize(root)
 
 
-def build_download_receipt_request(bank: Bank, keyring: Keyring, transaction_id: str) -> bytes:
+def build_download_receipt_request(
+    bank: Bank, keyring: Keyring, transaction_id: str, *, positive: bool = True
+) -> bytes:
     """Build the signed request acknowledging a completed download (phase Receipt).
 
     Args:
         bank: The target bank.
         keyring: The subscriber's key pairs (the X002 key signs the request).
         transaction_id: The transaction ID the bank issued during initialisation.
+        positive: ``True`` sends a positive acknowledgement (``ReceiptCode`` 0) — the bank
+            may mark the data delivered. ``False`` sends a negative acknowledgement
+            (``ReceiptCode`` 1) — the bank does *not* mark it delivered, so the data stays
+            available for a later download (EBICS 3.0 spec 5.6.1.2.2). Used to avoid
+            consuming data the client could not decrypt or validate, and for non-consuming
+            "keep" reads.
 
     Returns:
         The serialised, signed ``ebicsRequest`` XML.
@@ -604,7 +630,7 @@ def build_download_receipt_request(bank: Bank, keyring: Keyring, transaction_id:
     body = etree.SubElement(root, etree.QName(NAMESPACE, "body"))
     receipt = etree.SubElement(body, etree.QName(NAMESPACE, "TransferReceipt"))
     receipt.set("authenticate", "true")
-    _text(receipt, "ReceiptCode", _RECEIPT_POSITIVE)
+    _text(receipt, "ReceiptCode", _RECEIPT_POSITIVE if positive else _RECEIPT_NEGATIVE)
     # The TransferReceipt is authenticated too, so sign after building it, then place the
     # AuthSignature in schema order (header, AuthSignature, body).
     root.insert(1, crypto.build_auth_signature(root, keyring.authentication, NAMESPACE))

@@ -10,6 +10,7 @@ silently skipped.
 """
 
 import base64
+import datetime
 import zlib
 from pathlib import Path
 
@@ -17,7 +18,7 @@ import pytest
 from lxml import etree
 
 from ebicsclient import keys
-from ebicsclient.models import CAMT_053, PAIN_001, Bank, BankKeys, Keyring, User
+from ebicsclient.models import CAMT_053, PAIN_001, Bank, BankKeys, DateRange, Keyring, User
 from ebicsclient.protocol import h005
 
 _SCHEMA_DIR = Path(__file__).parent / "schema" / "H005"
@@ -98,6 +99,22 @@ def test_download_initialisation_request_validates(
     _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
 
 
+def test_dated_download_initialisation_request_validates(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    # The XSD is the oracle for DateRange: it must sit after <Service> and before any
+    # Parameter in BTDOrderParams (BTDParamsType), with inclusive Start/End dates.
+    request = h005.build_download_initialisation_request(
+        bank,
+        user,
+        keyring,
+        _bank_keys(keys.generate_keyring()),
+        CAMT_053,
+        DateRange(datetime.date(2026, 6, 1), datetime.date(2026, 6, 30)),
+    )
+    _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
+
+
 def test_download_transfer_request_validates(bank: Bank, keyring: Keyring) -> None:
     request = h005.build_download_transfer_request(
         bank, keyring, "A" * 32, 2, last_segment=True
@@ -105,9 +122,16 @@ def test_download_transfer_request_validates(bank: Bank, keyring: Keyring) -> No
     _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
 
 
-def test_download_receipt_request_validates(bank: Bank, keyring: Keyring) -> None:
-    request = h005.build_download_receipt_request(bank, keyring, "A" * 32)
-    _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
+@pytest.mark.parametrize(("positive", "expected_code"), [(True, "0"), (False, "1")])
+def test_download_receipt_request_validates(
+    positive: bool, expected_code: str, bank: Bank, keyring: Keyring
+) -> None:
+    # Both acknowledgement polarities must be schema-valid: 0 (positive, consume) and 1
+    # (negative, keep). ReceiptCodeType restricts to 0..1 (ebics_types_H005.xsd).
+    request = h005.build_download_receipt_request(bank, keyring, "A" * 32, positive=positive)
+    document = etree.fromstring(request)
+    _assert_valid(_schema("ebics_request_H005.xsd"), document)
+    assert document.findtext(f".//{{{_NS}}}ReceiptCode") == expected_code
 
 
 @pytest.mark.parametrize("admin_order_type", ["HAA", "HTD"])

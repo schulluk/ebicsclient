@@ -5,6 +5,7 @@ the exact H005 schema must still be validated against a bank test platform.
 """
 
 import base64
+import datetime
 import zlib
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from ebicsclient.errors import (
     UnknownReturnCodeError,
 )
 from ebicsclient.keys import CertificateUsage
-from ebicsclient.models import PAIN_001, Bank, BankKeys, Keyring, User
+from ebicsclient.models import CAMT_053, PAIN_001, Bank, BankKeys, DateRange, Keyring, User
 from ebicsclient.protocol import h005
 
 _NS = h005.NAMESPACE
@@ -286,6 +287,37 @@ def _bank_keys_from(bank_keyring: Keyring) -> BankKeys:
         authentication=bank_keyring.authentication.public_key(),
         encryption=bank_keyring.encryption.public_key(),
     )
+
+
+def test_download_initialisation_request_omits_date_range_by_default(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    request = h005.build_download_initialisation_request(
+        bank, user, keyring, _bank_keys_from(keys.generate_keyring()), CAMT_053
+    )
+    assert etree.fromstring(request).find(f".//{{{_NS}}}DateRange") is None
+
+
+def test_download_initialisation_request_carries_an_inclusive_date_range(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    request = h005.build_download_initialisation_request(
+        bank,
+        user,
+        keyring,
+        _bank_keys_from(keys.generate_keyring()),
+        CAMT_053,
+        DateRange(datetime.date(2026, 6, 1), datetime.date(2026, 6, 30)),
+    )
+    params = etree.fromstring(request).find(f".//{{{_NS}}}BTDOrderParams")
+    assert params is not None
+    # BTDParamsType sequence: Service then DateRange — assert that order on the wire.
+    children = [etree.QName(child).localname for child in params]
+    assert children[:2] == ["Service", "DateRange"]
+    date_range = params.find(f"{{{_NS}}}DateRange")
+    assert date_range is not None
+    assert date_range.findtext(f"{{{_NS}}}Start") == "2026-06-01"
+    assert date_range.findtext(f"{{{_NS}}}End") == "2026-06-30"
 
 
 def test_upload_initialisation_request_is_signed_and_carries_the_btu_details(

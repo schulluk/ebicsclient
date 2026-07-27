@@ -117,6 +117,19 @@ class MessageFormatError(EbicsError):
     """
 
 
+class DateRangeMismatchError(EbicsError):
+    """A dated download returned data outside the requested range.
+
+    Raised when :meth:`~ebicsclient.Client.download_statements` (or a sibling) was given a
+    ``date_range`` but the bank's data carries booking dates outside it — the strong signal
+    that the bank ignored the ``DateRange`` filter (it is an optional EBICS element a bank
+    may accept yet not honour) and served other data instead. The download is **not**
+    acknowledged when this is raised: the client sends a negative receipt so the bank keeps
+    the data available rather than consuming it against a mismatched request. Fail closed —
+    never return silently-wrong data as if it matched the request.
+    """
+
+
 class TransportError(EbicsError):
     """The HTTP exchange with the bank failed (connection, TLS, status code)."""
 

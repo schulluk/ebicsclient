@@ -214,6 +214,45 @@ class BusinessTransactionFormat:
         _require_optional_identifier("service_option", self.service_option)
 
 
+@dataclass(frozen=True, slots=True)
+class DateRange:
+    """An inclusive date range for a dated download (the BTD ``DateRange`` order parameter).
+
+    EBICS 3.0 lets a download request a specific reporting period instead of the default
+    (the bank's not-yet-delivered data). The H005 schema types both bounds as calendar
+    dates and treats them as **inclusive** (``DateRangeType``, ``ebics_orders_H005.xsd``);
+    the bank returns the messages whose reporting date falls within ``start..end``.
+
+    Whether a bank re-serves data it has *already* delivered for a past range is a
+    bank-side policy, not guaranteed by the standard — confirm with the bank before
+    relying on a dated re-download.
+
+    Attributes:
+        start: The first day to include (inclusive).
+        end: The last day to include (inclusive); must not precede ``start``.
+
+    Raises:
+        TypeError: a bound is not a :class:`datetime.date`.
+        ValueError: ``end`` precedes ``start``.
+    """
+
+    start: datetime.date
+    end: datetime.date
+
+    def __post_init__(self) -> None:
+        for field_name, value in (("start", self.start), ("end", self.end)):
+            # A datetime is a date subclass; reject it so a caller does not silently drop a
+            # time component the wire format has no room for.
+            if not isinstance(value, datetime.date) or isinstance(value, datetime.datetime):
+                raise TypeError(
+                    f"{field_name} must be a datetime.date, got {type(value).__name__}"
+                )
+        if self.end < self.start:
+            raise ValueError(
+                f"end ({self.end.isoformat()}) must not precede start ({self.start.isoformat()})"
+            )
+
+
 #: The Swiss camt.053.001.08 account-statement download (end-of-period, ZIP container).
 #: Matches the ZKB ``Z53`` order type verbatim (``EOP / CH / camt.053 / 08 / ZIP``); see
 #: docs/10-btf-order-types.md, which transcribes ZKB's published order-type/BTF catalogue.
@@ -578,6 +617,30 @@ class SubscriberInfo:
     name: str | None
     permissions: tuple[OrderTypeInfo, ...]
     order_types: tuple[OrderTypeInfo, ...]
+
+
+class ReceiptPolicy(StrEnum):
+    """What to do with downloaded data once it has been received and verified.
+
+    An EBICS download ends with a *receipt* that tells the bank whether to consume the data.
+    A positive receipt (``ReceiptCode`` 0) lets the bank mark the data delivered — it will
+    not be served again. A negative receipt (``ReceiptCode`` 1) tells the bank the data was
+    not processed, so it stays available for a later download (EBICS 3.0 spec 5.6.1.2.2).
+
+    This client acknowledges only **after** it has successfully decrypted (and, for a dated
+    download, validated) the data — a failure before that always sends a negative receipt,
+    so data is never consumed against an error. This policy governs the *successful* path:
+
+    - ``ACKNOWLEDGE``: on success, send a positive receipt — the normal case; the bank
+      consumes the data (default).
+    - ``KEEP``: on success, still send a *negative* receipt so the bank keeps the data
+      available — a non-consuming "peek" for discovery or test reads, where another
+      download must fetch the same data afterwards. Realised via the spec's negative
+      acknowledgement; whether a given bank then re-serves the kept data is bank-specific.
+    """
+
+    ACKNOWLEDGE = "acknowledge"
+    KEEP = "keep"
 
 
 class OutputFormat(StrEnum):

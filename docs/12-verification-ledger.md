@@ -4,7 +4,7 @@
 
 Twice now, a wrong-but-self-consistent implementation passed every test we had:
 
-1. **Exclusive c14n instead of inclusive C14N 1.0** (docs/08) — round-trip tests proved
+1. **Exclusive c14n instead of inclusive C14N 1.0** ([docs/08](08-parity-and-xsd-findings.md)) — round-trip tests proved
    consistency, not interoperability.
 2. **The EBICS 2.x public-key hash on the initialisation letter** — the EBICS 3.0 letter
    carries the SHA-256 of the DER-encoded *certificate* (spec 4.4.1.2.3), not the
@@ -29,6 +29,12 @@ UNVERIFIED here and in the README until an oracle exists.
   never derived from our own output. The spec's example letters (11.5.1/11.5.2) publish
   certificates *with* their expected hashes: `tests/test_spec_letter_vectors.py` pins them.
 - New protocol code lands with a row here, or it does not land.
+- **Mandated vs bank-dependent.** For behaviour the standard *mandates*, spec/XSD conformance
+  is the bar — confirming it at one bank proves nothing about the next (ZKB → Commerzbank →
+  Deutsche Bank never ends), so a mandated row reaches `spec` and is done. For behaviour the
+  standard *leaves to the bank*, no amount of standard-following makes it universal; such rows
+  stay `bank-dependent` by nature — surfaced to callers, never silently assumed, not a gap to
+  close. The at-a-glance split is in [docs/13-standard-conformance.md](13-standard-conformance.md).
 
 ## Status legend
 
@@ -52,11 +58,16 @@ UNVERIFIED here and in the README until an oracle exists.
 | **Letter: SHA-256 over certificate DER, uppercase; INI letter (A006) + HIA letter (X002, E002); certificates in PEM** | **Spec 4.4.1.2.3, 11.5.1, 11.5.2** | **spec-vector** (`test_spec_letter_vectors.py`) | spec-vector; **live activation pending** |
 | Deterministic self-signed certificates; unlimited validity permitted | Swiss MPG EBICS 3.0, section 6.1 | determinism tests; bank acceptance of self-signed certs is live | live (acceptance) |
 | `public_key_hash` (`e m`, lowercase, no leading zeros) for HPB out-of-band comparison and pinning | ZKB Bankparameterdaten publish this format | live (hashes match ZKB's published values) | live |
-| `BankPubKeyDigests` content: we send the `e m` public-key digest | **Spec 5.5.1.1 says certificate-DER hash** | ZKB test platform accepts `e m` in every transaction | **live-on-test, spec-divergent — watch-item** (docs/05); first suspect on `EBICS_BANK_PUBKEY_UPDATE_REQUIRED` |
+| `BankPubKeyDigests` content: we send the `e m` public-key digest | **Spec 5.5.1.1 says certificate-DER hash** | ZKB test platform accepts `e m` in every transaction | **live-on-test, spec-divergent — watch-item** ([docs/05](05-zkb-onboarding.md)); first suspect on `EBICS_BANK_PUBKEY_UPDATE_REQUIRED` |
 | `EncryptionPubKeyDigest` = hash of the public RSA key | Spec ("In addition to the hash value of the public RSA key…") | live (uploads accepted) | live |
+| Dated download: BTD `DateRange` (Start, End; both inclusive ISO dates; after `Service`, before `Parameter`) | Spec 5.6.1; `ebics_orders_H005.xsd` `BTDParamsType`/`DateRangeType` | XSD (`test_dated_download_initialisation_request_validates`) + live (ZKB test platform accepted the element: dated `EOP/camt.053` returned `090005 no-data`, not a format rejection) | live |
+| Negative receipt (`ReceiptCode` 1) leaves data un-consumed; acknowledge only after decrypt/validate | Spec 5.6.1.2.2 (positive=0 marks downloaded, negative=1 does not) | XSD (both polarities validate) + spec + tests | spec — mandated behaviour; implementing to spec is the bar (not a per-bank confirmation) |
+| Non-consuming `KEEP` read (deliberate negative ack) | Spec 5.6.1.2.2 negative acknowledgement | XSD + spec | spec |
+| Bank **re-serves already-delivered data** for a past `DateRange` | **Bank-dependent** — the spec does not guarantee it | none (test platform has no data to re-serve) | **bank-dependent (per spec)** — not a verification gap; never assumed, surfaced to callers |
+| Bank **honours** the `DateRange` filter (vs. accepting yet ignoring it) | **Bank-dependent** | strict client-side out-of-range check (`DateRangeMismatchError`) guards against silent ignore | bank-dependent (per spec); the library fails closed if a bank ignores it |
 | HPB response: `X509Data` mandatory, `X509Certificate` optional within it → bare-key fallback | ebics_types_H005.xsd `PubKeyInfoType`; xmldsig schema | XSD | XSD |
 | Bank keys ≥ 2048 bits rejected otherwise | Spec 4.7 (key-length increase) | unit tests | XSD/spec-cited |
-| H005-only; no H004 and earlier | Owner decision (docs/04) | n/a | n/a |
+| H005-only; no H004 and earlier | Owner decision ([docs/04](04-implementation-plan.md)) | n/a | n/a |
 
 ## 2.5→3.0 amendment audit (2026-07-22)
 

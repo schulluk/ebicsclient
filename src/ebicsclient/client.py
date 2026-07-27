@@ -7,6 +7,7 @@ fetching the bank's keys (HPB) and downloading statements.
 
 import base64
 import logging
+from collections.abc import Callable
 
 from ebicsclient import crypto, keys, letter
 from ebicsclient.certificates import (
@@ -14,7 +15,12 @@ from ebicsclient.certificates import (
     BankCertificateVerifier,
     CertificateProvider,
 )
-from ebicsclient.errors import BankKeyMismatchError, ClientStateError, ReturnCodeError
+from ebicsclient.errors import (
+    BankKeyMismatchError,
+    ClientStateError,
+    DateRangeMismatchError,
+    ReturnCodeError,
+)
 from ebicsclient.formats import camt052, camt053, camt054, pain002
 from ebicsclient.models import (
     CAMT_052,
@@ -25,12 +31,15 @@ from ebicsclient.models import (
     BankKeyHashes,
     BankKeys,
     BusinessTransactionFormat,
+    DateRange,
+    Entry,
     InitializationState,
     Keyring,
     Letter,
     Notification,
     OutputFormat,
     PaymentStatusReport,
+    ReceiptPolicy,
     Statement,
     SubscriberInfo,
     User,
@@ -44,6 +53,39 @@ logger = logging.getLogger(__name__)
 # is already initialised; it is also how the bank reports an unknown subscriber (which then
 # surfaces at HPB), so we identify it but do not treat a re-run as a hard failure.
 _SUBSCRIBER_STATE_INADMISSIBLE = "091002"
+
+
+def _dated_range_validator(
+    parse: Callable[[bytes], list[Statement]] | Callable[[bytes], list[Notification]],
+    date_range: DateRange,
+) -> Callable[[bytes], None]:
+    """Build a validator asserting every parsed booking entry falls within ``date_range``.
+
+    ``DateRange`` is an optional EBICS element a bank may accept without honouring; if it
+    ignores the filter and serves other data, the booking dates give it away. Booking dates
+    (not value dates, which can be forward-dated; not balance dates, whose opening balance
+    legitimately predates the range) are the reliable signal that the returned data belongs
+    to the requested period. An entry without a booking date, or a period with no entries,
+    is not evidence of a mismatch and passes.
+    """
+
+    def validate(order_data: bytes) -> None:
+        for document in parse(order_data):
+            for entry in document.entries:
+                _assert_entry_in_range(entry, date_range)
+
+    return validate
+
+
+def _assert_entry_in_range(entry: Entry, date_range: DateRange) -> None:
+    booking = entry.booking_date
+    if booking is not None and not (date_range.start <= booking <= date_range.end):
+        raise DateRangeMismatchError(
+            f"The bank returned an entry booked {booking.isoformat()}, outside the requested "
+            f"range {date_range.start.isoformat()}..{date_range.end.isoformat()} — the bank "
+            f"may not support DateRange filtering. The data was NOT acknowledged and remains "
+            f"available at the bank."
+        )
 
 
 class Client:
@@ -243,16 +285,37 @@ class Client:
                 "The bank's HPB keys do not match the pinned hashes; refusing to trust them"
             )
 
-    def download(self, btf: BusinessTransactionFormat) -> bytes:
+    def download(
+        self,
+        btf: BusinessTransactionFormat,
+        *,
+        date_range: DateRange | None = None,
+        receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE,
+        validate: Callable[[bytes], None] | None = None,
+    ) -> bytes:
         """Download order data for a Business Transaction Format and return the plaintext.
 
         Runs the full download transaction: it opens the transaction (initialisation),
-        fetches every further segment (transfer), acknowledges the transfer (receipt), then
-        reassembles, decrypts, and inflates the order data. The bank's keys must already be
-        available (call :meth:`hpb` first).
+        fetches every further segment (transfer), decrypts and inflates the order data, and
+        only then acknowledges it. Acknowledging last is deliberate — the receipt is what
+        lets the bank consume the data, so a failure to decrypt or validate sends a negative
+        receipt and the bank keeps the data rather than losing it. The bank's keys must
+        already be available (call :meth:`hpb` first).
 
         Args:
             btf: The Business Transaction Format to download (e.g. ``CAMT_053``).
+            date_range: An optional inclusive reporting period. When given, the bank returns
+                the messages for that period (the EBICS ``DateRange`` order parameter) rather
+                than the default not-yet-delivered data. Whether a bank re-serves data it has
+                already delivered for a past range is bank-specific — confirm before relying
+                on a dated re-download.
+            receipt_policy: What to do with the data once received (see
+                :class:`~ebicsclient.ReceiptPolicy`). ``ACKNOWLEDGE`` (default) consumes it;
+                ``KEEP`` leaves it available for a later download (a non-consuming read).
+            validate: An optional check run on the decrypted order data *before* the receipt.
+                If it raises, the download is not acknowledged (negative receipt) and the
+                exception propagates — the seam the dated convenience methods use to reject
+                out-of-range data.
 
         Returns:
             The decrypted, decompressed order-data bytes. For a container format this is the
@@ -266,11 +329,20 @@ class Client:
             CryptoError: the order data could not be decrypted.
         """
         bank_keys = self._require_bank_keys("Download")
-        logger.info("Download: opening a %s/%s transaction", btf.service_name, btf.message_name)
-        request = h005.build_download_initialisation_request(
-            self._bank, self._user, self._keyring, bank_keys, btf
+        logger.info(
+            "Download: opening a %s/%s transaction%s",
+            btf.service_name,
+            btf.message_name,
+            f" for {date_range.start.isoformat()}..{date_range.end.isoformat()}"
+            if date_range is not None
+            else "",
         )
-        return self._run_download_transaction(request, bank_keys)
+        request = h005.build_download_initialisation_request(
+            self._bank, self._user, self._keyring, bank_keys, btf, date_range
+        )
+        return self._run_download_transaction(
+            request, bank_keys, validate=validate, receipt_policy=receipt_policy
+        )
 
     def _require_bank_keys(self, operation: str) -> BankKeys:
         if self._bank_keys is None:
@@ -285,7 +357,12 @@ class Client:
         return response
 
     def _run_download_transaction(
-        self, initialisation_request: bytes, bank_keys: BankKeys
+        self,
+        initialisation_request: bytes,
+        bank_keys: BankKeys,
+        *,
+        validate: Callable[[bytes], None] | None = None,
+        receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE,
     ) -> bytes:
         initialisation = h005.parse_download_initialisation_response(
             self._post_verified(initialisation_request, bank_keys)
@@ -307,24 +384,57 @@ class Client:
             )
             segments.append(segment.order_data_segment)
 
-        # Acknowledge the completed transfer so the bank marks the download as delivered.
-        # The bank answers with 011000 EBICS_DOWNLOAD_POSTPROCESS_DONE — a success code.
-        receipt = h005.build_download_receipt_request(
-            self._bank, self._keyring, initialisation.transaction_id
-        )
-        h005.parse_download_receipt_response(self._post_verified(receipt, bank_keys))
-        logger.info(
-            "Download: received %d segment(s) for transaction %s",
-            initialisation.num_segments,
-            initialisation.transaction_id,
-        )
+        transaction_id = initialisation.transaction_id
+        # Decrypt and validate BEFORE acknowledging: the receipt is what lets the bank
+        # consume the data, so nothing is acknowledged until we have safely landed it. Any
+        # failure here sends a NEGATIVE receipt, so the bank keeps the data for redelivery
+        # rather than losing it to a positive ack we could not honour.
+        try:
+            # The segments are pieces of a single base64 stream, so join before decoding — a
+            # segment boundary need not fall on a 4-character base64 group.
+            encrypted_order_data = base64.b64decode("".join(segments))
+            order_data = crypto.decrypt_order_data(
+                self._keyring.encryption, initialisation.transaction_key, encrypted_order_data
+            )
+            if validate is not None:
+                validate(order_data)
+        except Exception:
+            self._acknowledge(transaction_id, bank_keys, positive=False)
+            raise
 
-        # The segments are pieces of a single base64 stream, so join before decoding — a
-        # segment boundary need not fall on a 4-character base64 group.
-        encrypted_order_data = base64.b64decode("".join(segments))
-        return crypto.decrypt_order_data(
-            self._keyring.encryption, initialisation.transaction_key, encrypted_order_data
+        # Success. ACKNOWLEDGE consumes the data (positive receipt); KEEP declines it
+        # (negative receipt) so the bank keeps it available for a later download.
+        positive = receipt_policy is ReceiptPolicy.ACKNOWLEDGE
+        self._acknowledge(transaction_id, bank_keys, positive=positive)
+        logger.info(
+            "Download: received %d segment(s) for transaction %s (%s)",
+            initialisation.num_segments,
+            transaction_id,
+            "acknowledged" if positive else "kept — negative receipt",
         )
+        return order_data
+
+    def _acknowledge(
+        self, transaction_id: str, bank_keys: BankKeys, *, positive: bool
+    ) -> None:
+        receipt = h005.build_download_receipt_request(
+            self._bank, self._keyring, transaction_id, positive=positive
+        )
+        try:
+            h005.parse_download_receipt_response(self._post_verified(receipt, bank_keys))
+        except Exception:
+            if positive:
+                # A failed positive acknowledgement is a real error: the caller must know
+                # the consume did not complete cleanly.
+                raise
+            # A negative acknowledgement is best-effort — it is sent either to preserve data
+            # after a failure (whose exception must not be masked) or for a KEEP read. Log
+            # and carry on; the data stays un-consumed either way.
+            logger.warning(
+                "Negative acknowledgement for transaction %s could not be confirmed; "
+                "the bank should still not have marked the data delivered",
+                transaction_id,
+            )
 
     def available_order_types(self) -> list[BusinessTransactionFormat]:
         """Download the order types for which the bank currently holds data (HAA).
@@ -380,12 +490,26 @@ class Client:
         )
         return h005.parse_subscriber_info(self._run_download_transaction(request, bank_keys))
 
-    def download_statements(self) -> list[Statement]:
+    def download_statements(
+        self,
+        *,
+        date_range: DateRange | None = None,
+        receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE,
+    ) -> list[Statement]:
         """Download the end-of-period camt.053 statements and parse them.
 
         A convenience over :meth:`download` for the common case: it fetches
         ``EOP/camt.053`` and returns the parsed statements (account, balances, entries).
         The bank's keys must already be available (call :meth:`hpb` first).
+
+        Args:
+            date_range: An optional inclusive reporting period (see :meth:`download`); when
+                given, fetches the statements for that period instead of the default
+                not-yet-delivered data, and every returned entry's booking date is asserted
+                to fall within it (:class:`~ebicsclient.errors.DateRangeMismatchError`
+                otherwise — the download is left un-acknowledged).
+            receipt_policy: What to do with the data once received (see
+                :class:`~ebicsclient.ReceiptPolicy`); ``KEEP`` reads without consuming.
 
         Returns:
             The account statements the bank delivered, in document order.
@@ -396,17 +520,34 @@ class Client:
             ProtocolError: a response could not be parsed.
             ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
             CryptoError: the order data could not be decrypted.
+            DateRangeMismatchError: a returned entry falls outside ``date_range``.
             MessageFormatError: the downloaded camt.053 data could not be parsed.
         """
-        return camt053.parse(self.download(CAMT_053))
+        validate = _dated_range_validator(camt053.parse, date_range) if date_range else None
+        return camt053.parse(
+            self.download(
+                CAMT_053, date_range=date_range, receipt_policy=receipt_policy, validate=validate
+            )
+        )
 
-    def download_intraday_statements(self) -> list[Statement]:
+    def download_intraday_statements(
+        self,
+        *,
+        date_range: DateRange | None = None,
+        receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE,
+    ) -> list[Statement]:
         """Download the intraday camt.052 account reports and parse them.
 
         A convenience over :meth:`download` for ``STM/camt.052``. Intraday reports share
         the statement shape; interim balances (if any) are in ``balances`` rather than
         ``opening_balance``/``closing_balance``. The bank's keys must already be available
         (call :meth:`hpb` first).
+
+        Args:
+            date_range: An optional inclusive reporting period (see :meth:`download`);
+                returned entries are asserted to fall within it.
+            receipt_policy: What to do with the data once received (see
+                :class:`~ebicsclient.ReceiptPolicy`).
 
         Returns:
             The intraday reports the bank delivered, in document order.
@@ -417,12 +558,22 @@ class Client:
             ProtocolError: a response could not be parsed.
             ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
             CryptoError: the order data could not be decrypted.
+            DateRangeMismatchError: a returned entry falls outside ``date_range``.
             MessageFormatError: the downloaded camt.052 data could not be parsed.
         """
-        return camt052.parse(self.download(CAMT_052))
+        validate = _dated_range_validator(camt052.parse, date_range) if date_range else None
+        return camt052.parse(
+            self.download(
+                CAMT_052, date_range=date_range, receipt_policy=receipt_policy, validate=validate
+            )
+        )
 
     def download_booking_advices(
-        self, btf: BusinessTransactionFormat = CAMT_054
+        self,
+        btf: BusinessTransactionFormat = CAMT_054,
+        *,
+        date_range: DateRange | None = None,
+        receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE,
     ) -> list[Notification]:
         """Download camt.054 debit/credit notifications (booking advices) and parse them.
 
@@ -433,6 +584,10 @@ class Client:
 
         Args:
             btf: The camt.054 Business Transaction Format; defaults to the plain ``CAMT_054``.
+            date_range: An optional inclusive reporting period (see :meth:`download`);
+                returned entries are asserted to fall within it.
+            receipt_policy: What to do with the data once received (see
+                :class:`~ebicsclient.ReceiptPolicy`).
 
         Returns:
             The notifications the bank delivered, in document order.
@@ -443,17 +598,35 @@ class Client:
             ProtocolError: a response could not be parsed.
             ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
             CryptoError: the order data could not be decrypted.
+            DateRangeMismatchError: a returned entry falls outside ``date_range``.
             MessageFormatError: the downloaded camt.054 data could not be parsed.
         """
-        return camt054.parse(self.download(btf))
+        validate = _dated_range_validator(camt054.parse, date_range) if date_range else None
+        return camt054.parse(
+            self.download(
+                btf, date_range=date_range, receipt_policy=receipt_policy, validate=validate
+            )
+        )
 
-    def download_payment_status_reports(self) -> list[PaymentStatusReport]:
+    def download_payment_status_reports(
+        self,
+        *,
+        date_range: DateRange | None = None,
+        receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE,
+    ) -> list[PaymentStatusReport]:
         """Download the pain.002 payment status reports and parse them.
 
         A convenience over :meth:`download` for the common case: it fetches
         ``PSR/pain.002`` and returns the parsed reports — the bank's verdicts on
         previously uploaded pain.001 files, including per-transaction rejections.
         The bank's keys must already be available (call :meth:`hpb` first).
+
+        Args:
+            date_range: An optional inclusive reporting period (see :meth:`download`). Unlike
+                the camt downloads, no per-entry range check is applied — a pain.002 carries
+                payment statuses, not dated booking entries.
+            receipt_policy: What to do with the data once received (see
+                :class:`~ebicsclient.ReceiptPolicy`).
 
         Returns:
             The payment status reports the bank delivered, in document order.
@@ -466,7 +639,9 @@ class Client:
             CryptoError: the order data could not be decrypted.
             MessageFormatError: the downloaded pain.002 data could not be parsed.
         """
-        return pain002.parse(self.download(PAIN_002))
+        return pain002.parse(
+            self.download(PAIN_002, date_range=date_range, receipt_policy=receipt_policy)
+        )
 
     def upload(self, btf: BusinessTransactionFormat, order_data: bytes) -> str:
         """Upload order data for a Business Transaction Format and return the transaction ID.

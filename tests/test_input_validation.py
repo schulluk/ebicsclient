@@ -169,6 +169,38 @@ def test_mapping_certificate_provider_rejects_non_certificate_values() -> None:
     assert "load_certificate()" in str(caught.value)
 
 
+def test_date_range_rejects_a_reversed_range() -> None:
+    import datetime
+
+    from ebicsclient.models import DateRange
+
+    with pytest.raises(ValueError) as caught:
+        DateRange(datetime.date(2026, 6, 30), datetime.date(2026, 6, 1))
+    assert "must not precede" in str(caught.value)
+
+
+def test_date_range_accepts_a_single_day() -> None:
+    import datetime
+
+    from ebicsclient.models import DateRange
+
+    day = datetime.date(2026, 6, 15)
+    date_range = DateRange(day, day)  # inclusive both ends — a one-day range is valid
+    assert date_range.start == date_range.end == day
+
+
+def test_date_range_rejects_a_datetime() -> None:
+    import datetime
+
+    from ebicsclient.models import DateRange
+
+    # A datetime is a date subclass; reject it so a time component cannot be silently
+    # dropped by the date-only wire format.
+    with pytest.raises(TypeError) as caught:
+        DateRange(datetime.datetime(2026, 6, 1, 12, 0), datetime.date(2026, 6, 30))  # type: ignore[arg-type]
+    assert "must be a datetime.date" in str(caught.value)
+
+
 def test_the_original_bug_now_fails_at_construction_not_in_cryptography() -> None:
     # Regression for the live report: with a numeric user_id the failure must happen at
     # User(...) with our message — never reach x509.NameAttribute inside cryptography.
