@@ -59,6 +59,11 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
+# The example scripts import a sibling `_config` helper; treat it as a local-folder import so
+# it sorts into its own group after the first-party `ebicsclient` imports.
+[tool.ruff.lint.isort]
+known-local-folder = ["_config"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

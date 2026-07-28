@@ -44,6 +44,10 @@ transaction_id = client.upload(PAIN_001, pain001_bytes)
 The certificate-based (*mit Zertifikaten*) profile is a constructor option — see
 [docs/11-certificate-profiles.md](https://github.com/schulluk/ebicsclient/blob/main/docs/11-certificate-profiles.md).
 
+More worked examples — a non-acking peek, a consume-safe nightly sync, a dated backfill, a
+payment round-trip, and certificate-profile onboarding — each with a short story, are in
+[examples/](https://github.com/schulluk/ebicsclient/blob/main/examples/README.md).
+
 > ### ⚠️ Loading EBICS identifiers from a config file? Quote them.
 >
 > EBICS IDs **can** carry leading zeros (a real Partner ID may look like `00123456`) and ISO
