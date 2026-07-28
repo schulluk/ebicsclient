@@ -22,7 +22,7 @@ from ebicsclient.models import Bank, Keyring, OutputFormat, User
 
 @pytest.fixture(scope="module")
 def bank() -> Bank:
-    return Bank(host_id="ZKBKCHZZ", url="https://ebicsweb.example.com/ebicsweb")
+    return Bank(host_id="HOST1", url="https://ebicsweb.example.com/ebicsweb")
 
 
 @pytest.fixture(scope="module")

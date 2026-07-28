@@ -227,7 +227,7 @@ def make_hpb_response(
     subscriber_keyring: Keyring,
     bank_keyring: Keyring,
     *,
-    host_id: str = "ZKBKCHZZ",
+    host_id: str = "HOST1",
     certificates: Mapping[CertificateUsage, x509.Certificate] | None = None,
 ) -> bytes:
     """Build an OK HPB response carrying the bank's keys, encrypted to the subscriber.

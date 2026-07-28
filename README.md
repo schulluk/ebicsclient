@@ -15,7 +15,7 @@ pip install ebicsclient          # add [pdf] for PDF letters, [tls] for the cert
 ```python
 from ebicsclient import Bank, User, Client, generate_keyring, save_keyring, PAIN_001
 
-bank = Bank(host_id="ZKBKCHZZ", url="https://ebicsweb.example.com/ebicsweb")
+bank = Bank(host_id="HOST1", url="https://ebicsweb.example.com/ebicsweb")
 user = User(partner_id="PARTNER1", user_id="USER1")
 
 # 1. Generate the three RSA key pairs (once) and store them encrypted.
