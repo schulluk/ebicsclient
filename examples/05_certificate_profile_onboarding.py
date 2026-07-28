@@ -1,12 +1,11 @@
 """Onboard with CA-issued certificates — the "mit Zertifikaten" profile.
 
-    Most subscribers use self-signed certificates: the library mints them from the keyring
-    and the bank trusts the fingerprints on the signed initialisation letter. Some banks, and
-    some corporate security policies, require the other profile instead — "mit Zertifikaten",
-    where the three subscriber keys are wrapped in certificates issued by a certificate
-    authority the bank already trusts. Ren's employer is one of those: their PKI team hands
-    out X.509 certificates for the signature, authentication, and encryption keys, and the
-    bank verifies them up the CA chain rather than off a letter.
+Runs INI and HIA using CA-issued certificates instead of the default self-signed ones. Most
+subscribers use self-signed certificates (the library mints them from the keyring, and the
+bank trusts the fingerprints on the signed initialisation letter). Some banks and corporate
+security policies require the "mit Zertifikaten" profile instead, where the three subscriber
+keys are wrapped in certificates issued by a certificate authority the bank already trusts and
+verifies up the chain.
 
 The only thing that changes is *where the certificates come from*. Instead of the default
 self-signed provider, this builds a :class:`~ebicsclient.MappingCertificateProvider` from

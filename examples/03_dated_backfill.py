@@ -1,18 +1,15 @@
 """Backfill history: fetch a specific past date range, and fail closed if the bank ignores it.
 
-    Marco is importing a company's accounts into a personal-finance tool for the first time.
-    The nightly feed handles *new* statements fine, but the tool starts empty — he needs the
-    back-history: every statement for the first quarter, 1 January to 31 March. EBICS can ask
-    for exactly that with a ``DateRange`` order parameter, so instead of waiting for the data
-    to trickle in he requests the whole quarter at once.
+Fetches statements for an explicit past period using the EBICS ``DateRange`` order parameter
+— useful for populating back-history rather than waiting for new statements to arrive. Pass
+the inclusive start and end dates on the command line.
 
-There is a catch worth being loud about: ``DateRange`` is a *request*, and whether a given
-bank actually honours it is bank-specific. If a bank quietly ignores the range and hands back
-its usual not-yet-delivered data, a naive importer would file today's statements under "Q1"
-and corrupt the history. So the dated ``download_statements`` guards the result: every
-returned entry's booking date must fall inside the requested window, or it raises
-``DateRangeMismatchError`` and leaves the data un-acknowledged at the bank. Better a clear
-failure than silently wrong history.
+``DateRange`` is a *request*, and whether a bank honours it is bank-specific. If a bank
+ignores the range and returns its usual not-yet-delivered data, filing that under the
+requested period would corrupt the history. So the dated ``download_statements`` guards the
+result: every returned entry's booking date must fall inside the requested window, or it
+raises ``DateRangeMismatchError`` and leaves the data un-acknowledged at the bank — a clear
+failure instead of silently wrong data.
 
     uv run python examples/03_dated_backfill.py 2025-01-01 2025-03-31
 """

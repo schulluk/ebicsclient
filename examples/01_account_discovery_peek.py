@@ -1,16 +1,13 @@
 """Peek at what the bank is holding — without consuming it.
 
-    Dana runs operations at a small treasury team. A new account has just been wired up for
-    EBICS, and before the nightly import job goes live she wants to *see* what the bank will
-    deliver — which IBAN, roughly how many entries — to sanity-check that the right mandate
-    was linked. But she must not actually collect the statements: in EBICS a positive receipt
-    tells the bank "I've got it, you can stop offering it", and if she consumes them now the
-    real import tonight would find nothing. She wants a look, not a take.
+Downloads the end-of-day statements with ``ReceiptPolicy.KEEP``: the download runs in full
+— initialise, transfer, decrypt, parse — but finishes with a *negative* receipt, so the bank
+keeps the data queued for the next reader instead of marking it delivered. A positive receipt
+(the default) tells the bank "I've got it, stop offering it"; ``KEEP`` declines that.
 
-That is exactly what ``ReceiptPolicy.KEEP`` is for. The download runs in full — initialise,
-transfer, decrypt, parse — but finishes with a *negative* receipt, so the bank keeps the
-data queued for the next reader. It is a read-only peek: safe to run against production, as
-often as you like, without disturbing whatever consumes the data for real.
+Use this for a read-only look at what is waiting — checking a newly wired-up account, say —
+without disturbing whatever consumes the data for real. It is safe to run repeatedly against
+production; each run leaves the statements available.
 
     uv run python examples/01_account_discovery_peek.py
 """

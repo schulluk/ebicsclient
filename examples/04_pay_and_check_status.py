@@ -1,16 +1,14 @@
 """Submit a payment, then come back for the bank's verdict.
 
-    Friday is supplier-payment day. Sofia's system has generated a pain.001 file — a batch of
-    credit transfers — and she uploads it to the bank over EBICS. The upload returning a
-    transaction ID only means the bank accepted the *envelope*: the signature verified, the
-    encryption was right, the file is syntactically an order. It does *not* mean the payments
-    will go through. Some minutes later the bank publishes a pain.002 status report with the
-    real answer — accepted, partially accepted, or rejected, sometimes down to the individual
-    transaction with a reason code. Sofia's workflow is two acts: pay now, check later.
+Shows the payment round-trip in two steps. ``pay`` uploads a pain.001 file (a batch of credit
+transfers); the returned transaction ID only means the bank accepted the *envelope* — the
+signature verified, the encryption was right, the file is syntactically an order. It does not
+mean the payments will go through. Some minutes later the bank publishes a pain.002 status
+report with the real outcome — accepted, partially accepted, or rejected, sometimes down to
+the individual transaction with a reason code. ``status`` downloads those reports and prints
+the group and per-transaction results.
 
-This example mirrors that with two steps. ``pay`` uploads the pain.001 you point it at;
-``status`` downloads the pain.002 reports and prints the group and per-transaction outcomes.
-Run ``pay`` first, give the bank a little time, then run ``status``.
+Run ``pay`` first, give the bank a little time to process, then run ``status``.
 
     uv run python examples/04_pay_and_check_status.py pay path/to/payment.xml
     # ... wait for the bank to process it ...

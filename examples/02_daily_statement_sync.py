@@ -1,19 +1,14 @@
-"""The nightly job: pull yesterday's statements, book them, and only then acknowledge.
+"""Pull the day's statements, process them, and only then acknowledge.
 
-    Every night at 02:00 a cron job on Priya's finance server wakes up and asks the bank for
-    the new end-of-day statements. It records each booking into the ledger, then lets the
-    bank mark the statements delivered so tomorrow's run does not fetch them again. The one
-    rule Priya insisted on: never tell the bank "got it" until the data is safely landed. If
-    the ledger write fails, or a statement will not parse, the statements must stay at the
-    bank so the next run can try again — losing a day of bookings to a half-finished import
-    is not acceptable.
+Demonstrates the consume-safe pattern for a nightly import job: never tell the bank "got it"
+until the data is safely landed. :meth:`Client.download` acknowledges *last* — it decrypts and
+parses before sending the positive receipt, and if anything in between raises it sends a
+*negative* receipt instead, so the bank keeps the data for the next run rather than losing it
+to a half-finished import.
 
-This is the library's default behaviour, and it is why :meth:`Client.download` acknowledges
-*last*. The download decrypts and parses before sending the positive receipt; if anything in
-between raises, it sends a *negative* receipt instead and the bank keeps the data. Here we
-lean on that with the ``validate`` seam: the "booking" (this example just prints, but pretend
-it is a database write) runs before the receipt, so any failure leaves the statements
-un-acknowledged at the bank.
+The example does the processing through the ``validate`` seam, which runs *before* the
+receipt. The "booking" here just prints, but stands in for a database write; because it runs
+before the acknowledgement, any failure leaves the statements un-acknowledged at the bank.
 
     uv run python examples/02_daily_statement_sync.py
 """
