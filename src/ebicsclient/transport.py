@@ -90,6 +90,10 @@ class Transport:
                 data: bytes = response.read()
                 return data
         except urllib.error.HTTPError as error:
+            # HTTPError is itself a response object holding an open buffer (a spooled
+            # temp file on Python 3.14+); close it so it does not leak while we translate
+            # the failure. error.code stays readable afterwards.
+            error.close()
             if 300 <= error.code < 400:
                 raise TransportError(
                     f"EBICS endpoint responded with a redirect (HTTP {error.code}); redirects "
