@@ -39,7 +39,8 @@ pdf = ["reportlab"]
 tls = ["certifi"]
 
 [project.urls]
-Homepage = "https://github.com/schulluk/ebicsclient"
+Homepage = "https://ebicsclient.miniapps.ch"
+Pricing = "https://ebicsclient.miniapps.ch/#pricing"
 Repository = "https://github.com/schulluk/ebicsclient"
 Issues = "https://github.com/schulluk/ebicsclient/issues"
 
