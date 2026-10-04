@@ -8,16 +8,16 @@
     "packages": [
         {
             "name": "ebics-api/ebics-client-php",
-            "version": "3.1.1",
+            "version": "3.2.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/ebics-api/ebics-client-php.git",
-                "reference": "568d2faafe67a47d0b2995c215aa2a49514c6bc9"
+                "reference": "11c2caf264a785c46f6d9de56a11e3cc377af60f"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/ebics-api/ebics-client-php/zipball/568d2faafe67a47d0b2995c215aa2a49514c6bc9",
-                "reference": "568d2faafe67a47d0b2995c215aa2a49514c6bc9",
+                "url": "https://api.github.com/repos/ebics-api/ebics-client-php/zipball/11c2caf264a785c46f6d9de56a11e3cc377af60f",
+                "reference": "11c2caf264a785c46f6d9de56a11e3cc377af60f",
                 "shasum": ""
             },
             "require": {
@@ -75,9 +75,9 @@
                 "x509"
             ],
             "support": {
-                "source": "https://github.com/ebics-api/ebics-client-php/tree/v3.1.1"
+                "source": "https://github.com/ebics-api/ebics-client-php/tree/v3.2.1"
             },
-            "time": "2026-05-04T07:27:29+00:00"
+            "time": "2026-08-27T18:15:39+00:00"
         }
     ],
     "packages-dev": [],
