@@ -4,6 +4,8 @@ A Python client for the **EBICS** banking protocol (EBICS 3.0 / H005):
 download statements and initiate payments over a single, source-available library. Validated
 live against Zürcher Kantonalbank (ZKB).
 
+**Free for personal and other noncommercial use.** Commercial use requires a paid license.
+
 Website, pricing and FAQ: **[ebicsclient.miniapps.ch](https://ebicsclient.miniapps.ch)**
 
 ## Install
