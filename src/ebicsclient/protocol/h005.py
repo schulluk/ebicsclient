@@ -52,6 +52,7 @@ from ebicsclient.models import (
     DownloadInitialisation,
     DownloadSegment,
     Keyring,
+    KeyRotation,
     OrderTypeInfo,
     SubscriberInfo,
     SubscriberPermissions,
@@ -66,6 +67,9 @@ S002_NAMESPACE = "http://www.ebics.org/S002"
 _DS = "http://www.w3.org/2000/09/xmldsig#"
 _NSMAP = cast("dict[str, str]", {None: NAMESPACE, "ds": _DS})
 _S002_NSMAP = cast("dict[str, str]", {None: S002_NAMESPACE, "ds": _DS})
+# HCS order data is in the H005 namespace but embeds the S002 SignaturePubKeyInfo
+# (HCSRequestOrderDataType, ebics_orders_H005.xsd), so it declares both.
+_HCS_NSMAP = cast("dict[str, str]", {None: NAMESPACE, "esig": S002_NAMESPACE, "ds": _DS})
 
 _PROTOCOL_VERSION = "H005"
 _REVISION = "1"
@@ -97,12 +101,35 @@ _KNOWN_RETURN_CODES = {
     "061001": "EBICS_AUTHENTICATION_FAILED",  # EBICS spec
     "061002": "EBICS_INVALID_REQUEST",  # EBICS spec
     "061099": "EBICS_INTERNAL_ERROR",  # EBICS spec
+    "090004": "EBICS_INVALID_ORDER_DATA_FORMAT",  # Annex 1; spec 4.6.1.1 (key changes)
     "090005": "EBICS_NO_DOWNLOAD_DATA_AVAILABLE",  # observed live
     "091002": "EBICS_INVALID_USER_OR_USER_STATE",  # observed live
+    "091003": "EBICS_USER_UNKNOWN",  # Annex 1; spec 4.6.1.1
+    "091004": "EBICS_INVALID_USER_STATE",  # Annex 1; spec 4.6.1.1 names it UNKNOWN_USER_STATE
     "091005": "EBICS_INVALID_ORDER_IDENTIFIER",  # observed live
+    "091008": "EBICS_BANK_PUBKEY_UPDATE_REQUIRED",  # Annex 1
+    # Key-management rejections of PUB/HCA/HCS order data (spec 4.6.1.1; codes from Annex 1).
+    "091201": "EBICS_KEYMGMT_UNSUPPORTED_VERSION_SIGNATURE",
+    "091202": "EBICS_KEYMGMT_UNSUPPORTED_VERSION_AUTHENTICATION",
+    "091203": "EBICS_KEYMGMT_UNSUPPORTED_VERSION_ENCRYPTION",
+    "091204": "EBICS_KEYMGMT_KEYLENGTH_ERROR_SIGNATURE",
+    "091205": "EBICS_KEYMGMT_KEYLENGTH_ERROR_AUTHENTICATION",
+    "091206": "EBICS_KEYMGMT_KEYLENGTH_ERROR_ENCRYPTION",
+    "091208": "EBICS_X509_CERTIFICATE_EXPIRED",  # Annex 1
+    "091209": "EBICS_X509_CERTIFICATE_NOT_VALID_YET",  # Annex 1 (misspelt ERTIFICATE there)
     "091210": "EBICS_X509_WRONG_KEY_USAGE",  # observed live
+    "091211": "EBICS_X509_WRONG_ALGORITHM",  # Annex 1
+    "091218": "EBICS_KEYMGMT_DUPLICATE_KEY",  # Annex 1
+    "091219": "EBICS_CERTIFICATES_VALIDATION_ERROR",  # Annex 1
+    "091301": "EBICS_SIGNATURE_VERIFICATION_FAILED",  # Annex 1; spec 4.6.1.1
 }
 
+# The administrative order type that carries each key change (spec 4.6.1.1).
+_KEY_CHANGE_ORDER_TYPES = {
+    KeyRotation.SIGNATURE: "PUB",
+    KeyRotation.AUTHENTICATION_AND_ENCRYPTION: "HCA",
+    KeyRotation.ALL: "HCS",
+}
 # xs:boolean lexical forms (XML Schema Part 2, 3.2.2), for HPD's optional support flags.
 _XSD_TRUE = frozenset({"true", "1"})
 _XSD_FALSE = frozenset({"false", "0"})
@@ -990,6 +1017,116 @@ def build_upload_initialisation_request(
     Returns:
         The serialised, signed ``ebicsRequest`` XML.
     """
+    return _upload_initialisation_request(
+        bank, user, keyring, bank_keys, _ADMIN_ORDER_TYPE_BTU, btf, payload
+    )
+
+
+def key_change_order_type(rotation: KeyRotation) -> str:
+    """Return the administrative order type that carries a key change (spec 4.6.1.1).
+
+    Args:
+        rotation: Which subscriber keys are being replaced.
+
+    Returns:
+        ``"PUB"`` (signature key), ``"HCA"`` (authentication and encryption keys), or
+        ``"HCS"`` (all three).
+    """
+    return _KEY_CHANGE_ORDER_TYPES[rotation]
+
+
+def build_key_change_order_data(
+    user: User,
+    new_keyring: Keyring,
+    rotation: KeyRotation,
+    certificate_provider: CertificateProvider = DEFAULT_CERTIFICATE_PROVIDER,
+) -> bytes:
+    """Build the order data announcing the subscriber's new public keys (PUB, HCA, HCS).
+
+    The formats are fixed by spec 4.6.1.2: PUB reuses the INI structure
+    (``SignaturePubKeyOrderData``, S002 namespace); HCA sends ``HCARequestOrderData`` and HCS
+    ``HCSRequestOrderData`` (``ebics_orders_H005.xsd``). Each key travels as an X.509
+    certificate, like in INI/HIA.
+
+    Args:
+        user: The subscriber whose keys change (named in the order data).
+        new_keyring: The subscriber's keyring *after* the change; only the keys ``rotation``
+            replaces are read from it.
+        rotation: Which keys are being replaced.
+        certificate_provider: Supplies the certificates for the new keys. Defaults to
+            self-signed (the "mit Schlüsseln" profile).
+
+    Returns:
+        The serialised order-data XML (not yet compressed, signed, or encrypted).
+
+    Raises:
+        CertificateError: the provider has no matching certificate for a new key.
+    """
+    if rotation is KeyRotation.SIGNATURE:
+        signature = certificate_provider.certificate(
+            keys.CertificateUsage.SIGNATURE, new_keyring.signature, user.user_id
+        )
+        return _signature_pubkey_order_data(user, signature)
+    authentication = certificate_provider.certificate(
+        keys.CertificateUsage.AUTHENTICATION, new_keyring.authentication, user.user_id
+    )
+    encryption = certificate_provider.certificate(
+        keys.CertificateUsage.ENCRYPTION, new_keyring.encryption, user.user_id
+    )
+    if rotation is KeyRotation.AUTHENTICATION_AND_ENCRYPTION:
+        return _subscriber_keys_order_data(
+            "HCARequestOrderData", user, authentication, encryption
+        )
+    signature = certificate_provider.certificate(
+        keys.CertificateUsage.SIGNATURE, new_keyring.signature, user.user_id
+    )
+    return _subscriber_keys_order_data(
+        "HCSRequestOrderData", user, authentication, encryption, signature
+    )
+
+
+def build_key_change_initialisation_request(
+    bank: Bank,
+    user: User,
+    keyring: Keyring,
+    bank_keys: BankKeys,
+    rotation: KeyRotation,
+    payload: UploadPayload,
+) -> bytes:
+    """Build the signed upload-initialisation request for a key change (PUB, HCA, or HCS).
+
+    PUB, HCA and HCS are regular upload transactions (spec 4.6.1.1): the same envelope as a
+    BTU upload, carrying the administrative order type with empty ``StandardOrderParams``
+    instead of a BTF. The request is authenticated with the subscriber's *current* X002 key,
+    and ``payload`` must carry the order data signed with the *current* A006 key — the new
+    keys only become valid once the bank has processed the order.
+
+    Args:
+        bank: The target bank.
+        user: The subscriber.
+        keyring: The subscriber's current key pairs (the X002 key signs the request).
+        bank_keys: The bank's public keys, digested into the request.
+        rotation: Which keys the order replaces (fixes the order type).
+        payload: The prepared upload payload of the key-change order data (from
+            :func:`prepare_upload` with the current keyring).
+
+    Returns:
+        The serialised, signed ``ebicsRequest`` XML.
+    """
+    return _upload_initialisation_request(
+        bank, user, keyring, bank_keys, key_change_order_type(rotation), None, payload
+    )
+
+
+def _upload_initialisation_request(
+    bank: Bank,
+    user: User,
+    keyring: Keyring,
+    bank_keys: BankKeys,
+    admin_order_type: str,
+    btf: BusinessTransactionFormat | None,
+    payload: UploadPayload,
+) -> bytes:
     root = etree.Element(etree.QName(NAMESPACE, "ebicsRequest"), nsmap=_NSMAP)
     root.set("Version", _PROTOCOL_VERSION)
     root.set("Revision", _REVISION)
@@ -1003,8 +1140,13 @@ def build_upload_initialisation_request(
     _text(static, "PartnerID", user.partner_id)
     _text(static, "UserID", user.user_id)
     order_details = etree.SubElement(static, etree.QName(NAMESPACE, "OrderDetails"))
-    _text(order_details, "AdminOrderType", _ADMIN_ORDER_TYPE_BTU)
-    _append_btu_order_params(order_details, btf)
+    _text(order_details, "AdminOrderType", admin_order_type)
+    if btf is not None:
+        _append_btu_order_params(order_details, btf)
+    else:
+        # OrderDetails requires an OrderParams (StaticHeaderOrderDetailsType); for an
+        # administrative upload that is the empty StandardOrderParams.
+        etree.SubElement(order_details, etree.QName(NAMESPACE, "StandardOrderParams"))
     _append_bank_pub_key_digests(static, bank_keys)
     _text(static, "SecurityMedium", _SECURITY_MEDIUM)
     _text(static, "NumSegments", str(payload.num_segments))
@@ -1347,13 +1489,30 @@ def _signature_pubkey_order_data(user: User, certificate: x509.Certificate) -> b
 def _hia_request_order_data(
     user: User, authentication: x509.Certificate, encryption: x509.Certificate
 ) -> bytes:
-    root = etree.Element(etree.QName(NAMESPACE, "HIARequestOrderData"), nsmap=_NSMAP)
+    return _subscriber_keys_order_data("HIARequestOrderData", user, authentication, encryption)
+
+
+def _subscriber_keys_order_data(
+    root_name: str,
+    user: User,
+    authentication: x509.Certificate,
+    encryption: x509.Certificate,
+    signature: x509.Certificate | None = None,
+) -> bytes:
+    # HIA, HCA and HCS share one sequence (ebics_orders_H005.xsd): AuthenticationPubKeyInfo,
+    # EncryptionPubKeyInfo, [HCS only: esig:SignaturePubKeyInfo], PartnerID, UserID.
+    nsmap = _NSMAP if signature is None else _HCS_NSMAP
+    root = etree.Element(etree.QName(NAMESPACE, root_name), nsmap=nsmap)
     auth_info = etree.SubElement(root, etree.QName(NAMESPACE, "AuthenticationPubKeyInfo"))
     _append_x509_data(auth_info, authentication)
     _text(auth_info, "AuthenticationVersion", _AUTHENTICATION_VERSION)
     enc_info = etree.SubElement(root, etree.QName(NAMESPACE, "EncryptionPubKeyInfo"))
     _append_x509_data(enc_info, encryption)
     _text(enc_info, "EncryptionVersion", _ENCRYPTION_VERSION)
+    if signature is not None:
+        signature_info = etree.SubElement(root, etree.QName(S002_NAMESPACE, "SignaturePubKeyInfo"))
+        _append_x509_data(signature_info, signature)
+        _s002_text(signature_info, "SignatureVersion", _SIGNATURE_VERSION)
     _text(root, "PartnerID", user.partner_id)
     _text(root, "UserID", user.user_id)
     return _serialize(root)

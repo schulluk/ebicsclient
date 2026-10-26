@@ -15,6 +15,7 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.serialization import Encoding
 from lxml import etree
 
 from crypto_helpers import issue_certificate, make_ca, make_hpb_response, sign_response
@@ -36,6 +37,7 @@ from ebicsclient.models import (
     BankKeys,
     DateRange,
     Keyring,
+    KeyRotation,
     User,
 )
 from ebicsclient.protocol import h005
@@ -932,3 +934,125 @@ def test_parse_subscriber_info_now_reads_the_permission_signature_class() -> Non
     uploads = [entry for entry in info.permissions if entry.admin_order_type == "BTU"]
     assert uploads
     assert all(entry.authorisation_level is AuthorisationLevel.INDIVIDUAL for entry in uploads)
+
+
+@pytest.mark.parametrize(
+    ("rotation", "order_type"),
+    [
+        (KeyRotation.SIGNATURE, "PUB"),
+        (KeyRotation.AUTHENTICATION_AND_ENCRYPTION, "HCA"),
+        (KeyRotation.ALL, "HCS"),
+    ],
+)
+def test_key_change_order_types_follow_the_spec(rotation: KeyRotation, order_type: str) -> None:
+    assert h005.key_change_order_type(rotation) == order_type
+
+
+def test_pub_order_data_carries_only_the_new_signature_certificate(
+    user: User, keyring: Keyring
+) -> None:
+    successor = keys.rotate_keyring(keyring, KeyRotation.SIGNATURE)
+    order_data = etree.fromstring(
+        h005.build_key_change_order_data(user, successor, KeyRotation.SIGNATURE)
+    )
+    # Spec 4.6.1.2: PUB reuses the INI structure (S002 SignaturePubKeyOrderData).
+    assert order_data.tag == f"{{{_S002}}}SignaturePubKeyOrderData"
+    assert _certified_modulus(order_data, _S002, "SignaturePubKeyInfo") == (
+        successor.signature.public_key().public_numbers().n
+    )
+    assert order_data.findtext(f"{{{_S002}}}UserID") == user.user_id
+
+
+def test_hca_order_data_carries_the_new_authentication_and_encryption_certificates(
+    user: User, keyring: Keyring
+) -> None:
+    successor = keys.rotate_keyring(keyring, KeyRotation.AUTHENTICATION_AND_ENCRYPTION)
+    order_data = etree.fromstring(
+        h005.build_key_change_order_data(
+            user, successor, KeyRotation.AUTHENTICATION_AND_ENCRYPTION
+        )
+    )
+    assert order_data.tag == f"{{{_NS}}}HCARequestOrderData"
+    assert _certified_modulus(order_data, _NS, "AuthenticationPubKeyInfo") == (
+        successor.authentication.public_key().public_numbers().n
+    )
+    assert _certified_modulus(order_data, _NS, "EncryptionPubKeyInfo") == (
+        successor.encryption.public_key().public_numbers().n
+    )
+    assert order_data.find(f".//{{{_S002}}}SignaturePubKeyInfo") is None
+
+
+def test_hcs_order_data_carries_all_three_new_certificates(user: User, keyring: Keyring) -> None:
+    successor = keys.rotate_keyring(keyring, KeyRotation.ALL)
+    order_data = etree.fromstring(
+        h005.build_key_change_order_data(user, successor, KeyRotation.ALL)
+    )
+    assert order_data.tag == f"{{{_NS}}}HCSRequestOrderData"
+    for namespace, info_tag, private_key in (
+        (_NS, "AuthenticationPubKeyInfo", successor.authentication),
+        (_NS, "EncryptionPubKeyInfo", successor.encryption),
+        (_S002, "SignaturePubKeyInfo", successor.signature),
+    ):
+        assert _certified_modulus(order_data, namespace, info_tag) == (
+            private_key.public_key().public_numbers().n
+        )
+    assert order_data.findtext(f"{{{_S002}}}SignaturePubKeyInfo/{{{_S002}}}SignatureVersion") == (
+        "A006"
+    )
+
+
+def test_key_change_order_data_uses_ca_certificates_from_the_provider(
+    user: User, keyring: Keyring
+) -> None:
+    successor = keys.rotate_keyring(keyring, KeyRotation.SIGNATURE)
+    ca_key, ca_certificate = make_ca()
+    certificate = issue_certificate(
+        ca_key, ca_certificate, successor.signature.public_key(), CertificateUsage.SIGNATURE
+    )
+    provider = MappingCertificateProvider({CertificateUsage.SIGNATURE: certificate})
+    order_data = etree.fromstring(
+        h005.build_key_change_order_data(user, successor, KeyRotation.SIGNATURE, provider)
+    )
+    embedded = order_data.findtext(f".//{{{_DS}}}X509Certificate")
+    assert embedded is not None
+    assert base64.b64decode(embedded) == certificate.public_bytes(Encoding.DER)
+
+
+def test_key_change_initialisation_request_is_an_admin_upload_signed_with_the_current_keys(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    bank_keyring = keys.generate_keyring()
+    bank_keys = _bank_keys_from(bank_keyring)
+    successor = keys.rotate_keyring(keyring, KeyRotation.ALL)
+    order_data = h005.build_key_change_order_data(user, successor, KeyRotation.ALL)
+    payload = h005.prepare_upload(user, keyring, bank_keys, order_data)
+    root = etree.fromstring(
+        h005.build_key_change_initialisation_request(
+            bank, user, keyring, bank_keys, KeyRotation.ALL, payload
+        )
+    )
+    assert root.findtext(f".//{{{_NS}}}AdminOrderType") == "HCS"
+    assert root.find(f".//{{{_NS}}}StandardOrderParams") is not None
+    assert root.find(f".//{{{_NS}}}BTUOrderParams") is None
+    assert root.find(f".//{{{_NS}}}SignatureData") is not None
+    # Authenticated with the CURRENT X002 — the bank does not know the new one yet.
+    assert crypto.verify_auth_signature(root, keyring.authentication.public_key())
+    assert not crypto.verify_auth_signature(root, successor.authentication.public_key())
+
+    # The bank decrypts the ES and verifies it with the CURRENT A006 (spec 4.6.1.1).
+    signature_xml = crypto.decrypt_order_data(
+        bank_keyring.encryption,
+        payload.wrapped_transaction_key,
+        base64.b64decode(payload.signature_data),
+    )
+    signature_value = etree.fromstring(signature_xml).findtext(f".//{{{_S002}}}SignatureValue")
+    assert signature_value is not None
+    # The serialised order data has a newline after the XML declaration, which the ES hash
+    # leaves out (spec 14); A006 then signs that hash value (spec 14.1.4.2.5).
+    assert b"\n" in order_data
+    keyring.signature.public_key().verify(
+        base64.b64decode(signature_value),
+        hashlib.sha256(order_data.replace(b"\n", b"")).digest(),
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
+        hashes.SHA256(),
+    )

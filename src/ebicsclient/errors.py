@@ -130,6 +130,37 @@ class DateRangeMismatchError(EbicsError):
     """
 
 
+class KeyChangeUnconfirmedError(EbicsError):
+    """A key change (PUB, HCA, HCS) reached the bank, but its outcome is unknown.
+
+    The bank processes a key change synchronously and reports the result in its response to
+    the final upload segment (EBICS 3.0 spec 4.3, 5.1.3.1). This error means that segment was
+    sent but no trustworthy answer came back — the connection failed, the response could not be
+    verified, or it carried a return code this client does not know. The bank may hold
+    either the old keys or the new ones.
+
+    Keep **both** keyrings until you know which one the bank holds; discarding either may
+    lock the subscriber out (recovery then needs a full re-initialisation through the bank).
+    After an HCA or HCS, an HPB with the new keyring succeeds only if the bank switched,
+    since HPB is authenticated with the X002 key and encrypted to the E002 key. Never retry
+    automatically: the client is still on the old keys, and a second key change against an
+    unknown state cannot clarify it.
+
+    Attributes:
+        order_type: The key-change order type that was sent (``"PUB"``, ``"HCA"``, ``"HCS"``).
+        transaction_id: The bank-issued transaction ID of the key-change upload.
+    """
+
+    def __init__(self, order_type: str, transaction_id: str) -> None:
+        self.order_type = order_type
+        self.transaction_id = transaction_id
+        super().__init__(
+            f"{order_type} key change (transaction {transaction_id}) was sent, but the bank's "
+            f"answer could not be confirmed — it may hold the old or the new keys. Keep both "
+            f"keyrings until you have established which one is active."
+        )
+
+
 class TransportError(EbicsError):
     """The HTTP exchange with the bank failed (connection, TLS, status code)."""
 

@@ -18,7 +18,16 @@ import pytest
 from lxml import etree
 
 from ebicsclient import keys
-from ebicsclient.models import CAMT_053, PAIN_001, Bank, BankKeys, DateRange, Keyring, User
+from ebicsclient.models import (
+    CAMT_053,
+    PAIN_001,
+    Bank,
+    BankKeys,
+    DateRange,
+    Keyring,
+    KeyRotation,
+    User,
+)
 from ebicsclient.protocol import h005
 
 _SCHEMA_DIR = Path(__file__).parent / "schema" / "H005"
@@ -165,6 +174,40 @@ def test_upload_initialisation_request_validates_except_the_signature_flag(
 def test_upload_transfer_request_validates(bank: Bank, keyring: Keyring) -> None:
     request = h005.build_upload_transfer_request(
         bank, keyring, "A" * 32, 1, "c2VnbWVudA==", last_segment=True
+    )
+    _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
+
+
+@pytest.mark.parametrize(
+    ("rotation", "schema_name"),
+    [
+        # Spec 4.6.1.2: PUB order data is the INI structure (S002); HCA and HCS have their
+        # own H005 order-data elements.
+        (KeyRotation.SIGNATURE, "ebics_signature_S002.xsd"),
+        (KeyRotation.AUTHENTICATION_AND_ENCRYPTION, "ebics_orders_H005.xsd"),
+        (KeyRotation.ALL, "ebics_orders_H005.xsd"),
+    ],
+)
+def test_key_change_order_data_validates(
+    rotation: KeyRotation, schema_name: str, user: User, keyring: Keyring
+) -> None:
+    successor = keys.rotate_keyring(keyring, rotation)
+    order_data = etree.fromstring(h005.build_key_change_order_data(user, successor, rotation))
+    _assert_valid(_schema(schema_name), order_data)
+
+
+@pytest.mark.parametrize("rotation", list(KeyRotation))
+def test_key_change_initialisation_request_validates(
+    rotation: KeyRotation, bank: Bank, user: User, keyring: Keyring
+) -> None:
+    # Unlike a BTU upload (SignatureFlag, above), the admin upload is fully schema-valid.
+    bank_keys = _bank_keys(keys.generate_keyring())
+    successor = keys.rotate_keyring(keyring, rotation)
+    payload = h005.prepare_upload(
+        user, keyring, bank_keys, h005.build_key_change_order_data(user, successor, rotation)
+    )
+    request = h005.build_key_change_initialisation_request(
+        bank, user, keyring, bank_keys, rotation, payload
     )
     _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
 

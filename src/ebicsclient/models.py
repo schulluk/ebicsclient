@@ -833,6 +833,23 @@ class BankParameters:
     supports_downloadable_order_data: bool
 
 
+class KeyRotation(StrEnum):
+    """Which of the subscriber's keys a key change replaces at the bank.
+
+    Each value maps to one EBICS 3.0 administrative order type (spec 4.6.1.1), all of which
+    replace the keys in a single exchange, with no new initialisation letter:
+
+    - ``SIGNATURE``: the A006 signature key (order type ``PUB``).
+    - ``AUTHENTICATION_AND_ENCRYPTION``: the X002 authentication and E002 encryption keys
+      (order type ``HCA``).
+    - ``ALL``: all three keys at once (order type ``HCS``).
+    """
+
+    SIGNATURE = "signature"
+    AUTHENTICATION_AND_ENCRYPTION = "authentication_and_encryption"
+    ALL = "all"
+
+
 class ReceiptPolicy(StrEnum):
     """What to do with downloaded data once it has been received and verified.
 

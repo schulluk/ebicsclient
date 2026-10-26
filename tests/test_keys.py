@@ -1,6 +1,9 @@
 """Tests for ebicsclient.keys: keyring generation, serialisation, and public-key hashes."""
 
+import dataclasses
 import hashlib
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -9,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from ebicsclient import keys
 from ebicsclient.errors import KeyringDecryptionError, KeyringError, KeyringFormatError
-from ebicsclient.models import BankKeys, Keyring
+from ebicsclient.models import BankKeys, Keyring, KeyRotation
 
 _PASSPHRASE = "correct horse battery staple"
 
@@ -105,6 +108,115 @@ def test_save_and_load_keyring_round_trip_through_a_file(keyring: Keyring, tmp_p
     path = tmp_path / "keyring.json"
     keys.save_keyring(keyring, path, passphrase=_PASSPHRASE)
     _assert_same_public_keys(keys.load_keyring(path, passphrase=_PASSPHRASE), keyring)
+
+
+def test_save_keyring_replaces_an_existing_file_and_leaves_no_temporary_behind(
+    keyring: Keyring, tmp_path: Path
+) -> None:
+    path = tmp_path / "keyring.json"
+    keys.save_keyring(keys.generate_keyring(), path, passphrase=_PASSPHRASE)
+    keys.save_keyring(keyring, path, passphrase=_PASSPHRASE)
+    _assert_same_public_keys(keys.load_keyring(path, passphrase=_PASSPHRASE), keyring)
+    assert [entry.name for entry in tmp_path.iterdir()] == ["keyring.json"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_save_keyring_writes_an_owner_only_file(keyring: Keyring, tmp_path: Path) -> None:
+    path = tmp_path / "keyring.json"
+    keys.save_keyring(keyring, path, passphrase=_PASSPHRASE)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_a_failed_save_keeps_the_previous_keyring_intact(
+    keyring: Keyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The atomic write must never leave a half-written keyring where the old one was —
+    # after a key change, losing either keyring can lock the subscriber out.
+    path = tmp_path / "keyring.json"
+    keys.save_keyring(keyring, path, passphrase=_PASSPHRASE)
+    before = path.read_bytes()
+
+    def _fail(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", _fail)
+    with pytest.raises(KeyringError):
+        keys.save_keyring(keys.generate_keyring(), path, passphrase=_PASSPHRASE)
+    assert path.read_bytes() == before
+    assert [entry.name for entry in tmp_path.iterdir()] == ["keyring.json"]
+
+
+@pytest.mark.parametrize(
+    ("rotation", "replaced"),
+    [
+        (KeyRotation.SIGNATURE, {"signature"}),
+        (KeyRotation.AUTHENTICATION_AND_ENCRYPTION, {"authentication", "encryption"}),
+        (KeyRotation.ALL, {"signature", "authentication", "encryption"}),
+    ],
+)
+def test_rotate_keyring_replaces_exactly_the_rotated_keys(
+    keyring: Keyring, rotation: KeyRotation, replaced: set[str]
+) -> None:
+    successor = keys.rotate_keyring(keyring, rotation)
+    for field in ("signature", "authentication", "encryption"):
+        old = getattr(keyring, field).public_key().public_numbers()
+        new = getattr(successor, field).public_key().public_numbers()
+        assert (old != new) is (field in replaced), field
+        assert getattr(successor, field).key_size == 2048
+    keys.validate_key_change(keyring, successor, rotation)  # a well-formed change
+
+
+def test_rotate_keyring_rejects_keys_below_the_ebics_minimum(keyring: Keyring) -> None:
+    with pytest.raises(KeyringError):
+        keys.rotate_keyring(keyring, KeyRotation.ALL, key_size=1024)
+
+
+def test_rotate_keyring_rejects_a_plain_string_rotation(keyring: Keyring) -> None:
+    with pytest.raises(TypeError, match="KeyRotation"):
+        keys.rotate_keyring(keyring, "all")  # type: ignore[arg-type]
+
+
+def test_validate_key_change_rejects_a_changed_key_the_order_does_not_cover(
+    keyring: Keyring,
+) -> None:
+    # HCA must leave A006 alone, or client and bank would disagree on the signature key.
+    successor = keys.rotate_keyring(keyring, KeyRotation.ALL)
+    with pytest.raises(ValueError, match="signature key unchanged"):
+        keys.validate_key_change(keyring, successor, KeyRotation.AUTHENTICATION_AND_ENCRYPTION)
+
+
+def test_validate_key_change_rejects_an_unchanged_rotated_key(keyring: Keyring) -> None:
+    with pytest.raises(ValueError, match="one of the current keys"):
+        keys.validate_key_change(keyring, keyring, KeyRotation.SIGNATURE)
+
+
+def test_validate_key_change_rejects_a_current_key_moved_into_another_role(
+    keyring: Keyring,
+) -> None:
+    moved = dataclasses.replace(keyring, signature=keyring.authentication)
+    with pytest.raises(ValueError, match="one of the current keys"):
+        keys.validate_key_change(keyring, moved, KeyRotation.SIGNATURE)
+
+
+def test_validate_key_change_rejects_one_new_key_used_for_two_roles(keyring: Keyring) -> None:
+    # EBICS_KEYMGMT_DUPLICATE_KEY (Annex 1): refused before anything is sent.
+    shared = keys.generate_keyring().authentication
+    successor = dataclasses.replace(keyring, authentication=shared, encryption=shared)
+    with pytest.raises(ValueError, match="two roles"):
+        keys.validate_key_change(keyring, successor, KeyRotation.AUTHENTICATION_AND_ENCRYPTION)
+
+
+def test_validate_key_change_rejects_a_short_new_key(keyring: Keyring) -> None:
+    short = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    with pytest.raises(KeyringError):
+        keys.validate_key_change(
+            keyring, dataclasses.replace(keyring, signature=short), KeyRotation.SIGNATURE
+        )
+
+
+def test_validate_key_change_rejects_a_non_keyring_successor(keyring: Keyring) -> None:
+    with pytest.raises(TypeError, match="Keyring"):
+        keys.validate_key_change(keyring, "keyring.json", KeyRotation.ALL)  # type: ignore[arg-type]
 
 
 def test_load_keyring_from_a_missing_file_raises(tmp_path: Path) -> None:

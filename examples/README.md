@@ -24,6 +24,7 @@ subscriber online. Then set the environment variables listed at the top of
 | [`03_dated_backfill.py`](03_dated_backfill.py) | Fetches statements for a specific past date range, failing closed if the bank ignores the range. | `DateRange` + `DateRangeMismatchError` |
 | [`04_pay_and_check_status.py`](04_pay_and_check_status.py) | Uploads a pain.001 batch, then downloads the pain.002 verdict — accepted, partial, or rejected down to the transaction. | Payment upload + status-report round-trip |
 | [`05_certificate_profile_onboarding.py`](05_certificate_profile_onboarding.py) | Runs INI/HIA presenting CA-issued certificates instead of self-signed ones. | "mit Zertifikaten" profile (`MappingCertificateProvider`, `TrustAnchorVerifier`) |
+| [`06_key_rotation.py`](06_key_rotation.py) | Replaces all three keys at the bank without a letter, storing the new keyring so neither set can be lost. | Key change (`HCS`, `change_keys`, `rotate_keyring`) |
 
 For the complete step-by-step handshake against a live bank (every order type, one
 subcommand each), see [`zkb_handshake.py`](zkb_handshake.py).

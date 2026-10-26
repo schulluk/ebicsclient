@@ -39,12 +39,32 @@ activation PIN**.
 Steps 1–4 (up to printing the letters) can be built and tested **without** waiting on ZKB — do them
 against the test platform first. Step 5 onward needs ZKB to have activated you.
 
+### Changing the keys of an active subscriber (PUB / HCA / HCS)
+
+An activated subscriber (state *Ready*) replaces its keys without a new letter: `PUB` for the
+A006 signature key, `HCA` for the X002 and E002 keys, `HCS` for all three (spec 4.6.1). The
+order is signed with the *current* keys, and the bank switches as soon as it has processed it,
+so the new keys must be safely stored **before** the change is sent:
+
+```python
+successor = rotate_keyring(client.keyring, KeyRotation.ALL)
+save_keyring(successor, "keyring.next.json", passphrase)  # 1. new keys safe first
+client.change_keys(successor, KeyRotation.ALL)            # 2. the bank switches
+os.replace("keyring.next.json", "keyring.json")           # 3. promote atomically
+```
+
+If `change_keys` raises `KeyChangeUnconfirmedError`, the change was sent but its outcome is
+unknown: keep both files until you know which keys the bank holds. Any other error means the
+bank kept the old keys — delete the successor. `examples/zkb_handshake.py pub|hca|hcs` runs
+exactly this sequence; all three were validated live on 2026-10-26.
+
 ### Re-initialisation (changed keys or certificates)
 
 Once INI/HIA have been accepted, the subscriber is in the *Initialised* state and the bank
 **rejects a re-run with `091002`** (the client reports `ALREADY_INITIALISED` and the new
-certificates are **not** transmitted). If the keyring or certificate generation changed after a
-first INI/HIA (key rotation, client upgrade), the letters will show hashes the bank cannot match
+certificates are **not** transmitted). For an *active* subscriber, change keys with PUB/HCA/HCS
+(above) instead. If the keyring or certificate generation changed after a
+first INI/HIA but before activation (a regenerated keyring, a client upgrade), the letters will show hashes the bank cannot match
 — observed live as ZKB error **17104 "Der Hashwert … ist nicht korrekt"** on all three keys. The
 sequence must be:
 

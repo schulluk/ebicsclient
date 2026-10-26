@@ -49,7 +49,7 @@ The certificate-based (*mit Zertifikaten*) profile is a constructor option — s
 [docs/11-certificate-profiles.md](https://github.com/schulluk/ebicsclient/blob/main/docs/11-certificate-profiles.md).
 
 More worked examples — a non-acking peek, a consume-safe sync, a dated backfill, a payment
-round-trip, and certificate-profile onboarding — are in
+round-trip, certificate-profile onboarding, and key rotation — are in
 [examples/](https://github.com/schulluk/ebicsclient/blob/main/examples/README.md).
 
 > ### ⚠️ Loading EBICS identifiers from a config file? Quote them.
@@ -63,11 +63,11 @@ round-trip, and certificate-profile onboarding — are in
 
 ## What it does
 
-Key ceremony (INI/HIA/HPB), statement/report downloads (camt.053/052/054, pain.002) with optional
-dated ranges, payment uploads (pain.001), and the bank's registered data (HTD/HKD) and
-parameters (HPD) — read and write validated live against ZKB. Pure Python (`cryptography`,
-`lxml`), no PHP/Java sidecar. Not yet built: multi-person signatures (EDS/VEU), key rotation,
-and several administrative order types.
+Key ceremony (INI/HIA/HPB) and key rotation without a new letter (PUB/HCA/HCS), statement/report
+downloads (camt.053/052/054, pain.002) with optional dated ranges, payment uploads (pain.001), and
+the bank's registered data (HTD/HKD) and parameters (HPD) — read and write validated live against
+ZKB. Pure Python (`cryptography`, `lxml`), no PHP/Java sidecar. Not yet built: multi-person
+signatures (EDS/VEU) and several administrative order types.
 
 Full capability-by-capability coverage, gaps, and verification status:
 **[docs/13-standard-conformance.md](https://github.com/schulluk/ebicsclient/blob/main/docs/13-standard-conformance.md)**.

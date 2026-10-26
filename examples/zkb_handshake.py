@@ -19,6 +19,13 @@ Steps, matching the EBICS initialisation ceremony (see docs/05, docs/07):
     htd        show the subscriber data registered at the bank
     hkd        show the customer data and every subscriber registered at the bank
     hpd        show the bank's EBICS parameters (versions, supported features)
+    pub        replace the signature key (A006) at the bank, then the stored keyring
+    hca        replace the authentication and encryption keys (X002, E002)
+    hcs        replace all three keys at once
+
+The key changes (pub/hca/hcs) need no letter. Each writes the new keyring next to the current
+one first (``<keyring>.next``), sends the change, and only then moves it over the current file,
+so neither keyring is lost whatever the bank answers.
 
 Run each step in order, e.g.::
 
@@ -64,11 +71,14 @@ from ebicsclient import (
     BankKeys,
     Client,
     InitializationState,
+    KeyChangeUnconfirmedError,
+    KeyRotation,
     OutputFormat,
     User,
     generate_keyring,
     load_keyring,
     public_key_hash,
+    rotate_keyring,
     save_keyring,
 )
 from ebicsclient.formats import camt053
@@ -88,7 +98,7 @@ def main() -> int:
         "step",
         choices=[
             "generate", "ini", "hia", "letter", "hpb", "hashes", "download", "upload",
-            "pain002", "haa", "htd", "hkd", "hpd",
+            "pain002", "haa", "htd", "hkd", "hpd", "pub", "hca", "hcs",
         ],
     )
     step = parser.parse_args().step
@@ -290,6 +300,48 @@ def _hpd() -> int:
     return 0
 
 
+def _change_keys(rotation: KeyRotation) -> int:
+    path = _keyring_path()
+    successor_path = path.with_name(f"{path.name}.next")
+    if successor_path.exists():
+        print(f"Refusing: {successor_path} is left over from an unfinished key change. Find out "
+              f"which keyring the bank holds before removing either file.", file=sys.stderr)
+        return 1
+    client = _build_client()
+    _fetch_bank_keys(client)
+    successor = rotate_keyring(client.keyring, rotation)
+    # 1. The new keys are safe on disk before the bank can switch to them.
+    save_keyring(successor, successor_path, _passphrase())
+    try:
+        # 2. The bank switches; the client adopts the successor only on a confirmed success.
+        transaction_id = client.change_keys(successor, rotation)
+    except KeyChangeUnconfirmedError as error:
+        print(f"UNCONFIRMED: {error}", file=sys.stderr)
+        print(f"Kept both {path} (old keys) and {successor_path} (new keys).", file=sys.stderr)
+        return 1
+    except Exception:
+        # Anything else means the bank kept the old keys: the successor is useless.
+        successor_path.unlink()
+        raise
+    # 3. Promote the successor over the old keyring in one atomic rename.
+    os.replace(successor_path, path)
+    print(f"Key change accepted (transaction {transaction_id}); {path} now holds the new keys.")
+    _print_own_hashes(successor)
+    return 0
+
+
+def _pub() -> int:
+    return _change_keys(KeyRotation.SIGNATURE)
+
+
+def _hca() -> int:
+    return _change_keys(KeyRotation.AUTHENTICATION_AND_ENCRYPTION)
+
+
+def _hcs() -> int:
+    return _change_keys(KeyRotation.ALL)
+
+
 def _build_client() -> Client:
     return Client(_bank(), _user(), _load_keyring())
 
@@ -359,6 +411,9 @@ _STEPS = {
     "htd": _htd,
     "hkd": _hkd,
     "hpd": _hpd,
+    "pub": _pub,
+    "hca": _hca,
+    "hcs": _hcs,
 }
 
 

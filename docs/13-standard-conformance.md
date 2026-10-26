@@ -35,10 +35,10 @@ absent, not excluded — unless the **Notes** say otherwise.
 | Initialisation letters (INI + HIA), SHA-256 certificate-DER hash | Mandated | ✅ | spec-vector | |
 | HPB key trust via published hash / pinning | Bank-dependent | ✅ | live | Published hashes are out-of-band per bank |
 | Bank certificate chain validation (`TrustAnchorVerifier`) | Bank-dependent | ✅ | spec | Only when a bank mandates a CA |
-| PUB — change the bank-technical (signature) key | Mandated | ❌ | | Key rotation; today a key change means full re-init (new INI/HIA + letters) |
-| HCA — change the authentication + encryption keys | Mandated | ❌ | | Key rotation (see PUB) |
-| HCS — change all three subscriber keys at once | Mandated | ❌ | | Key rotation (see PUB) |
-| SPR — suspend / lock the subscriber's access | Mandated | ❌ | | e.g. on suspected key compromise |
+| PUB — change the bank-technical (signature) key | Mandated | ✅ | live | `change_keys(…, KeyRotation.SIGNATURE)`, no letter. The client adopts the new keys only after the bank confirms; an unknown outcome raises `KeyChangeUnconfirmedError` (keep both keyrings). Persisting is the caller's: `rotate_keyring` + the atomic `save_keyring` |
+| HCA — change the authentication + encryption keys | Mandated | ✅ | live | `change_keys(…, KeyRotation.AUTHENTICATION_AND_ENCRYPTION)` (see PUB) |
+| HCS — change all three subscriber keys at once | Mandated | ✅ | live | `change_keys(…, KeyRotation.ALL)` (see PUB) |
+| SPR — suspend / lock the subscriber's access | Mandated | ❌ | | e.g. on suspected key compromise; not run live, since it would lock the test subscriber |
 | H3K — one-step CA-certificate initialisation | Mandated (optional) | ❌ | | CA profile only; not a priority |
 
 ## Read — downloads

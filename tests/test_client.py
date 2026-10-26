@@ -9,17 +9,27 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
-from crypto_helpers import make_download_responses, make_hpb_response, sign_response
-from ebicsclient import keys
+from crypto_helpers import (
+    issue_certificate,
+    make_ca,
+    make_download_responses,
+    make_hpb_response,
+    sign_response,
+)
+from ebicsclient import crypto, keys
+from ebicsclient.certificates import MappingCertificateProvider
 from ebicsclient.client import Client
 from ebicsclient.errors import (
     BankKeyMismatchError,
     ClientStateError,
     CryptoError,
     DateRangeMismatchError,
+    KeyChangeUnconfirmedError,
     ResponseAuthenticationError,
     ReturnCodeError,
+    TransportError,
 )
+from ebicsclient.keys import CertificateUsage
 from ebicsclient.models import (
     CAMT_053,
     PAIN_001,
@@ -28,6 +38,7 @@ from ebicsclient.models import (
     DateRange,
     InitializationState,
     Keyring,
+    KeyRotation,
     OutputFormat,
     ReceiptPolicy,
     User,
@@ -65,15 +76,21 @@ class _FakeTransport:
 
 
 class _QueueTransport:
-    """Returns queued responses in order and records every request posted."""
+    """Returns queued responses in order and records every request posted.
 
-    def __init__(self, responses: list[bytes]) -> None:
+    A queued exception is raised instead of returned, to simulate a failed exchange.
+    """
+
+    def __init__(self, responses: list[bytes | Exception]) -> None:
         self._responses = list(responses)
         self.posts: list[bytes] = []
 
     def post(self, body: bytes) -> bytes:
         self.posts.append(body)
-        return self._responses.pop(0)
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 @pytest.fixture(scope="module")
@@ -135,7 +152,7 @@ def test_hpb_stores_and_returns_the_bank_keys(keyring: Keyring) -> None:
 
 
 def _download_client(
-    responses: list[bytes], keyring: Keyring, bank_keys: BankKeys
+    responses: list[bytes | Exception], keyring: Keyring, bank_keys: BankKeys
 ) -> tuple[Client, _QueueTransport]:
     transport = _QueueTransport(responses)
     client = Client(
@@ -570,3 +587,141 @@ def test_admin_downloads_require_hpb_first(method: str, keyring: Keyring) -> Non
     client, _ = _client(_OK_RESPONSE, keyring)
     with pytest.raises(ClientStateError):
         getattr(client, method)()
+
+
+def _transfer_response(code: str, bank_keyring: Keyring) -> bytes:
+    return sign_response(
+        (
+            f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static/>'
+            f"<mutable><TransactionPhase>Transfer</TransactionPhase>"
+            f"<ReturnCode>{code}</ReturnCode></mutable></header>"
+            f"<body><ReturnCode>{code}</ReturnCode></body></ebicsResponse>"
+        ).encode(),
+        bank_keyring,
+    )
+
+
+@pytest.mark.parametrize(
+    ("rotation", "order_type"),
+    [
+        (KeyRotation.SIGNATURE, "PUB"),
+        (KeyRotation.AUTHENTICATION_AND_ENCRYPTION, "HCA"),
+        (KeyRotation.ALL, "HCS"),
+    ],
+)
+def test_change_keys_sends_the_order_and_adopts_the_successor(
+    rotation: KeyRotation, order_type: str, keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    successor = keys.rotate_keyring(keyring, rotation)
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="F" * 32),
+        _upload_response("Transfer", bank_keyring),
+    ]
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    assert client.change_keys(successor, rotation) == "F" * 32
+    assert client.keyring is successor
+    opened = etree.fromstring(transport.posts[0])
+    assert opened.findtext(f".//{{{_NS}}}AdminOrderType") == order_type
+    # Both phases are authenticated with the keys the bank holds BEFORE the change.
+    for post in transport.posts:
+        assert crypto.verify_auth_signature(
+            etree.fromstring(post), keyring.authentication.public_key()
+        )
+
+
+def test_change_keys_keeps_the_current_keys_when_the_bank_rejects_the_change(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    successor = keys.rotate_keyring(keyring, KeyRotation.ALL)
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="F" * 32),
+        _transfer_response("091301", bank_keyring),  # EBICS_SIGNATURE_VERIFICATION_FAILED
+    ]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(ReturnCodeError) as caught:
+        client.change_keys(successor, KeyRotation.ALL)
+    assert caught.value.code == "091301"
+    assert not isinstance(caught.value, KeyChangeUnconfirmedError)
+    assert client.keyring is keyring
+
+
+def test_change_keys_keeps_the_current_keys_when_the_initialisation_fails(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # The order data travels only in the transfer phase: a lost initialisation is definite.
+    successor = keys.rotate_keyring(keyring, KeyRotation.SIGNATURE)
+    responses: list[bytes | Exception] = [TransportError("connection reset")]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(TransportError):
+        client.change_keys(successor, KeyRotation.SIGNATURE)
+    assert client.keyring is keyring
+
+
+@pytest.mark.parametrize(
+    "final_response",
+    ["lost", "unsigned", "unknown-code"],
+)
+def test_change_keys_reports_an_unconfirmed_outcome_after_the_final_segment(
+    final_response: str, keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    final: bytes | Exception
+    if final_response == "lost":
+        final = TransportError("timed out")
+    elif final_response == "unsigned":
+        final = (
+            f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static/>'
+            "<mutable><ReturnCode>000000</ReturnCode></mutable></header>"
+            "<body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
+        ).encode()
+    else:
+        final = _transfer_response("099999", bank_keyring)
+    successor = keys.rotate_keyring(keyring, KeyRotation.AUTHENTICATION_AND_ENCRYPTION)
+    responses = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="F" * 32),
+        final,
+    ]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(KeyChangeUnconfirmedError) as caught:
+        client.change_keys(successor, KeyRotation.AUTHENTICATION_AND_ENCRYPTION)
+    assert caught.value.order_type == "HCA"
+    assert caught.value.transaction_id == "F" * 32
+    # The client stays on the old keys; the caller must establish which set the bank holds.
+    assert client.keyring is keyring
+
+
+def test_change_keys_validates_the_successor_before_sending_anything(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    client, transport = _download_client([], keyring, _bank_keys(bank_keyring))
+    with pytest.raises(ValueError):
+        client.change_keys(keyring, KeyRotation.ALL)
+    with pytest.raises(TypeError):
+        client.change_keys(keys.rotate_keyring(keyring, KeyRotation.ALL), "all")  # type: ignore[arg-type]
+    assert transport.posts == []
+
+
+def test_change_keys_requires_hpb_first(keyring: Keyring) -> None:
+    client, _ = _client(_OK_RESPONSE, keyring)
+    with pytest.raises(ClientStateError):
+        client.change_keys(keys.rotate_keyring(keyring, KeyRotation.ALL), KeyRotation.ALL)
+
+
+def test_change_keys_adopts_a_new_certificate_provider_only_on_success(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    successor = keys.rotate_keyring(keyring, KeyRotation.SIGNATURE)
+    ca_key, ca_certificate = make_ca()
+    provider = MappingCertificateProvider(
+        {
+            CertificateUsage.SIGNATURE: issue_certificate(
+                ca_key, ca_certificate, successor.signature.public_key(), CertificateUsage.SIGNATURE
+            )
+        }
+    )
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="F" * 32),
+        _upload_response("Transfer", bank_keyring),
+    ]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    client.change_keys(successor, KeyRotation.SIGNATURE, certificate_provider=provider)
+    assert client._certificate_provider is provider

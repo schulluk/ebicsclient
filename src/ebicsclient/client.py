@@ -19,7 +19,10 @@ from ebicsclient.errors import (
     BankKeyMismatchError,
     ClientStateError,
     DateRangeMismatchError,
+    EbicsError,
+    KeyChangeUnconfirmedError,
     ReturnCodeError,
+    UnknownReturnCodeError,
 )
 from ebicsclient.formats import camt052, camt053, camt054, pain002
 from ebicsclient.models import (
@@ -37,6 +40,7 @@ from ebicsclient.models import (
     Entry,
     InitializationState,
     Keyring,
+    KeyRotation,
     Letter,
     Notification,
     OutputFormat,
@@ -44,6 +48,7 @@ from ebicsclient.models import (
     ReceiptPolicy,
     Statement,
     SubscriberInfo,
+    UploadPayload,
     User,
 )
 from ebicsclient.protocol import h005
@@ -130,6 +135,11 @@ class Client:
     def bank_keys(self) -> BankKeys | None:
         """The bank's public keys once HPB has run, or ``None`` before then."""
         return self._bank_keys
+
+    @property
+    def keyring(self) -> Keyring:
+        """The subscriber's current key pairs (the successor's after a :meth:`change_keys`)."""
+        return self._keyring
 
     def make_ini_letter(
         self,
@@ -752,3 +762,119 @@ class Client:
             "Upload: sent %d segment(s) for transaction %s", len(segments), transaction_id
         )
         return transaction_id
+
+    def change_keys(
+        self,
+        new_keyring: Keyring,
+        rotation: KeyRotation,
+        *,
+        certificate_provider: CertificateProvider | None = None,
+    ) -> str:
+        """Replace subscriber keys at the bank (PUB, HCA, or HCS) and switch this client to them.
+
+        Sends the key change as the EBICS 3.0 order type for ``rotation`` — ``PUB`` for the
+        signature key, ``HCA`` for the authentication and encryption keys, ``HCS`` for all
+        three (spec 4.6.1). No initialisation letter is needed: the order is signed with the
+        *current* A006 key and authenticated with the *current* X002 key, and the bank
+        switches as soon as it has processed it. Only then does this client adopt
+        ``new_keyring`` (see :attr:`keyring`); on any failure it keeps the current keys.
+
+        The library never touches your stored keyring, so persist the successor **before**
+        sending — once the bank has switched, the old keys no longer work, and a successor
+        lost to a crash would lock the subscriber out::
+
+            successor = rotate_keyring(client.keyring, KeyRotation.ALL)
+            save_keyring(successor, "keyring.next.json", passphrase)  # 1. new keys safe first
+            client.change_keys(successor, KeyRotation.ALL)            # 2. the bank switches
+            os.replace("keyring.next.json", "keyring.json")           # 3. promote atomically
+
+        If step 2 raises :class:`~ebicsclient.errors.KeyChangeUnconfirmedError`, keep both
+        files and establish which keys the bank holds. Any other error means the bank kept
+        the old keys: delete the successor file and carry on with the current keyring.
+
+        Args:
+            new_keyring: The successor keyring (from :func:`~ebicsclient.rotate_keyring`):
+                new keys for the ones ``rotation`` replaces, the others unchanged.
+            rotation: Which keys to replace.
+            certificate_provider: Supplies the certificates for the new keys; defaults to
+                this client's provider. Pass one with the new CA-issued certificates for the
+                "mit Zertifikaten" profile — it then replaces the client's provider once the
+                change succeeds.
+
+        Returns:
+            The bank-issued transaction ID of the key-change upload.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TypeError: ``new_keyring`` is not a Keyring or ``rotation`` not a KeyRotation.
+            ValueError: ``new_keyring`` does not replace exactly the keys ``rotation`` covers.
+            KeyringError: a new key is shorter than 2048 bits.
+            CertificateError: the certificate provider has no certificate for a new key.
+            TransportError: a request before the final segment could not be delivered (the
+                bank cannot have processed the change).
+            ProtocolError: a response before the final segment could not be parsed or
+                verified.
+            ReturnCodeError: the bank rejected the key change; it keeps the old keys.
+            KeyChangeUnconfirmedError: the final segment was sent but its outcome could not
+                be confirmed; the bank may hold either keyring.
+        """
+        bank_keys = self._require_bank_keys("Key change")
+        keys.validate_key_change(self._keyring, new_keyring, rotation)
+        provider = (
+            certificate_provider if certificate_provider is not None else self._certificate_provider
+        )
+        order_type = h005.key_change_order_type(rotation)
+        order_data = h005.build_key_change_order_data(self._user, new_keyring, rotation, provider)
+        # Spec 4.6.1.1: the subscriber's ES over the key-change order data is made with the
+        # signature key that is active now — the current keyring, never the successor.
+        payload = h005.prepare_upload(self._user, self._keyring, bank_keys, order_data)
+        logger.info("%s: opening a key change for user %s", order_type, self._user.user_id)
+        request = h005.build_key_change_initialisation_request(
+            self._bank, self._user, self._keyring, bank_keys, rotation, payload
+        )
+        transaction_id = h005.parse_upload_initialisation_response(
+            self._post_verified(request, bank_keys)
+        )
+        self._transfer_key_change(order_type, transaction_id, payload, bank_keys)
+
+        self._keyring = new_keyring
+        if certificate_provider is not None:
+            self._certificate_provider = certificate_provider
+        logger.info(
+            "%s: the bank accepted the key change (transaction %s); the client now uses the "
+            "new keys",
+            order_type,
+            transaction_id,
+        )
+        return transaction_id
+
+    def _transfer_key_change(
+        self, order_type: str, transaction_id: str, payload: UploadPayload, bank_keys: BankKeys
+    ) -> None:
+        segments = payload.order_data_segments
+        for number, segment_data in enumerate(segments, start=1):
+            last_segment = number == len(segments)
+            transfer = h005.build_upload_transfer_request(
+                self._bank,
+                self._keyring,
+                transaction_id,
+                number,
+                segment_data,
+                last_segment=last_segment,
+            )
+            if not last_segment:
+                # The bank processes the order only once it has the last segment, so a
+                # failure here leaves the old keys in force: let it propagate as is.
+                h005.parse_upload_transfer_response(self._post_verified(transfer, bank_keys))
+                continue
+            # The bank processes the change before answering the final segment (spec 4.3),
+            # so that answer is authoritative: a verified rejection means the old keys stay.
+            # Anything short of a verified answer leaves the outcome open.
+            try:
+                h005.parse_upload_transfer_response(self._post_verified(transfer, bank_keys))
+            except UnknownReturnCodeError as error:
+                raise KeyChangeUnconfirmedError(order_type, transaction_id) from error
+            except ReturnCodeError:
+                raise
+            except EbicsError as error:
+                raise KeyChangeUnconfirmedError(order_type, transaction_id) from error

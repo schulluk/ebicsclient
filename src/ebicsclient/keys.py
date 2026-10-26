@@ -19,6 +19,8 @@ import datetime
 import hashlib
 import json
 import logging
+import os
+import tempfile
 from enum import StrEnum
 from pathlib import Path
 
@@ -28,7 +30,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 from ebicsclient.errors import KeyringDecryptionError, KeyringError, KeyringFormatError
-from ebicsclient.models import BankKeyHashes, BankKeys, Keyring
+from ebicsclient.models import BankKeyHashes, BankKeys, Keyring, KeyRotation
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,12 @@ _MINIMUM_KEY_SIZE = 2048
 _PUBLIC_EXPONENT = 65537
 _KEYRING_FORMAT_VERSION = 1
 _KEY_FIELDS = ("signature", "authentication", "encryption")
+# The keyring fields each key change replaces (PUB: A006; HCA: X002 + E002; HCS: all three).
+_ROTATED_FIELDS = {
+    KeyRotation.SIGNATURE: ("signature",),
+    KeyRotation.AUTHENTICATION_AND_ENCRYPTION: ("authentication", "encryption"),
+    KeyRotation.ALL: _KEY_FIELDS,
+}
 
 # Self-signed certificates for the key-based ("mit Schlüsseln") profile are DETERMINISTIC:
 # regenerating one for the same key always yields byte-identical DER. That matters because
@@ -88,6 +96,113 @@ def generate_keyring(key_size: int = _MINIMUM_KEY_SIZE) -> Keyring:
         authentication=_generate_private_key(key_size),
         encryption=_generate_private_key(key_size),
     )
+
+
+def rotate_keyring(
+    keyring: Keyring, rotation: KeyRotation, key_size: int = _MINIMUM_KEY_SIZE
+) -> Keyring:
+    """Generate the successor keyring for a key change: new pairs for the replaced keys only.
+
+    The keys ``rotation`` replaces are freshly generated; the others are carried over
+    unchanged, so the result is exactly what the bank holds after a successful
+    :meth:`ebicsclient.Client.change_keys`. Persist it (somewhere other than the current
+    keyring) *before* sending the change — see that method for the safe sequence.
+
+    Args:
+        keyring: The subscriber's current keyring.
+        rotation: Which keys to replace.
+        key_size: RSA modulus size in bits for the new keys; at least 2048 (EBICS H005).
+
+    Returns:
+        The successor keyring.
+
+    Raises:
+        TypeError: ``rotation`` is not a :class:`~ebicsclient.KeyRotation`.
+        KeyringError: key_size is below the EBICS minimum of 2048 bits.
+    """
+    _require_rotation(rotation)
+    if key_size < _MINIMUM_KEY_SIZE:
+        raise KeyringError(
+            f"RSA key size {key_size} is below the EBICS minimum of {_MINIMUM_KEY_SIZE} bits"
+        )
+    rotated = _ROTATED_FIELDS[rotation]
+    logger.info("Generating %d new %d-bit RSA key pair(s) for a key change", len(rotated), key_size)
+    replaced = {
+        field: _generate_private_key(key_size) if field in rotated else getattr(keyring, field)
+        for field in _KEY_FIELDS
+    }
+    return Keyring(**replaced)
+
+
+def validate_key_change(current: Keyring, successor: Keyring, rotation: KeyRotation) -> None:
+    """Check that a successor keyring is a well-formed key change of the current one.
+
+    A key change must replace exactly the keys its order type covers: sending HCA with a
+    changed signature key, for instance, would leave the client and the bank disagreeing on
+    the A006 key. The bank also rejects a key reused for a second role
+    (``EBICS_KEYMGMT_DUPLICATE_KEY``, Annex 1), so that is refused here, before anything is
+    sent.
+
+    Args:
+        current: The keyring the bank holds now.
+        successor: The keyring the bank should hold after the change.
+        rotation: Which keys the change replaces.
+
+    Raises:
+        TypeError: ``successor`` is not a :class:`~ebicsclient.Keyring`, or ``rotation`` is
+            not a :class:`~ebicsclient.KeyRotation`.
+        ValueError: a key the change does not cover differs, a covered key is unchanged or
+            reuses one of the current keys, or two keys of the successor are the same.
+        KeyringError: a new key is shorter than the EBICS minimum of 2048 bits.
+    """
+    _require_rotation(rotation)
+    if not isinstance(successor, Keyring):
+        raise TypeError(
+            f"The successor keyring must be a Keyring, got {type(successor).__name__} — "
+            f"build it with rotate_keyring()"
+        )
+    rotated = _ROTATED_FIELDS[rotation]
+    current_keys = {_public_numbers(getattr(current, field)) for field in _KEY_FIELDS}
+    for field in _KEY_FIELDS:
+        old_numbers = _public_numbers(getattr(current, field))
+        new_key: rsa.RSAPrivateKey = getattr(successor, field)
+        new_numbers = _public_numbers(new_key)
+        if field not in rotated:
+            if new_numbers != old_numbers:
+                raise ValueError(
+                    f"A {rotation.value} key change must keep the {field} key unchanged, but "
+                    f"the successor keyring holds a different one"
+                )
+            continue
+        if new_numbers in current_keys:
+            raise ValueError(
+                f"The successor's {field} key is one of the current keys — a key change "
+                f"needs a newly generated key (use rotate_keyring())"
+            )
+        if new_key.key_size < _MINIMUM_KEY_SIZE:
+            raise KeyringError(
+                f"The new {field} key has {new_key.key_size} bits, below the EBICS minimum "
+                f"of {_MINIMUM_KEY_SIZE}"
+            )
+    successor_keys = {_public_numbers(getattr(successor, field)) for field in _KEY_FIELDS}
+    if len(successor_keys) != len(_KEY_FIELDS):
+        raise ValueError(
+            "The successor keyring uses one key for two roles; the bank rejects that "
+            "(EBICS_KEYMGMT_DUPLICATE_KEY)"
+        )
+
+
+def _public_numbers(private_key: rsa.RSAPrivateKey) -> rsa.RSAPublicNumbers:
+    return private_key.public_key().public_numbers()
+
+
+def _require_rotation(rotation: object) -> None:
+    # A plain string such as "all" compares equal to the enum member, so it would slip past
+    # dictionary lookups yet fail identity checks further down — reject it at the boundary.
+    if not isinstance(rotation, KeyRotation):
+        raise TypeError(
+            f"rotation must be a KeyRotation, got {type(rotation).__name__} ({rotation!r})"
+        )
 
 
 class CertificateUsage(StrEnum):
@@ -291,9 +406,15 @@ def deserialize_keyring(data: bytes, passphrase: str) -> Keyring:
 def save_keyring(keyring: Keyring, path: str | Path, passphrase: str) -> None:
     """Write an encrypted keyring to a file (convenience over :func:`serialize_keyring`).
 
+    The write is atomic: the keyring goes to a temporary file in the same directory, is
+    flushed to disk, and then replaces ``path`` in one rename. A crash or a full disk mid-way
+    leaves the previous file intact rather than a truncated keyring — which matters most
+    after a key change, when the old keys no longer work at the bank. The file is created
+    readable and writable by its owner only.
+
     Args:
         keyring: The key pairs to persist.
-        path: Destination file path (a ``str`` or ``Path``); overwritten if it exists.
+        path: Destination file path (a ``str`` or ``Path``); replaced if it exists.
         passphrase: Secret used to encrypt the private keys. Never stored or logged.
 
     Raises:
@@ -303,10 +424,41 @@ def save_keyring(keyring: Keyring, path: str | Path, passphrase: str) -> None:
     data = serialize_keyring(keyring, passphrase)
     destination = Path(path)
     try:
-        destination.write_bytes(data)
+        _write_atomically(destination, data)
     except OSError as error:
         raise KeyringError(f"Could not write keyring to {destination}: {error}") from error
     logger.info("Wrote encrypted keyring to %s", destination)
+
+
+def _write_atomically(destination: Path, data: bytes) -> None:
+    # mkstemp creates the file with mode 0600 in the destination's directory, so the final
+    # os.replace is a same-filesystem rename — atomic on POSIX and Windows alike.
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    _sync_directory(destination.parent)
+
+
+def _sync_directory(directory: Path) -> None:
+    # Persist the rename itself. POSIX allows fsync on a directory descriptor; Windows does
+    # not open directories this way, so there the rename stays atomic but is not forced out.
+    if os.name != "posix":
+        return
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def load_keyring(path: str | Path, passphrase: str) -> Keyring:
