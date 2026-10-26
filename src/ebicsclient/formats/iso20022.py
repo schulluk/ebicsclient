@@ -44,7 +44,8 @@ def root_namespace(document: bytes) -> str | None:
     """Return the namespace of a document's root element, reading only its start tag.
 
     Args:
-        document: The raw XML document bytes.
+        document: The raw XML document bytes, or a prefix of them that holds the complete
+            root start tag.
 
     Returns:
         The root element's namespace URI, or ``None`` if it declares none.
@@ -64,7 +65,14 @@ def root_namespace(document: bytes) -> str | None:
         _, root = next(events)
     except (etree.XMLSyntaxError, StopIteration) as error:
         raise MessageFormatError(f"Delivered document is not readable XML: {error}") from error
-    return etree.QName(root).namespace
+    # Read the Clark notation ("{namespace}Document") directly: etree.QName raises
+    # ValueError on a tag lxml builds but cannot name, such as a root whose prefix is
+    # undeclared — which simply has no namespace.
+    tag = root.tag
+    if not isinstance(tag, str) or not tag.startswith("{"):
+        return None
+    namespace, _, _ = tag[1:].partition("}")
+    return namespace
 
 
 def message_identifier(namespace: str | None) -> MessageIdentifier | None:

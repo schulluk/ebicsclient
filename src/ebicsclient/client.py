@@ -66,6 +66,12 @@ logger = logging.getLogger(__name__)
 # surfaces at HPB), so we identify it but do not treat a re-run as a hard failure.
 _SUBSCRIBER_STATE_INADMISSIBLE = "091002"
 
+# The version check reads only each delivered document's root start tag, so it inflates
+# no more of a ZIP entry than this. The XML declaration, any leading comments and the root
+# tag of a real delivery take a few hundred bytes; a document whose root tag does not fit
+# cannot be identified and counts as unreadable.
+_DOCUMENT_HEAD_LENGTH = 64 * 1024
+
 
 _Parsed = TypeVar("_Parsed")
 
@@ -118,7 +124,7 @@ def _version_mismatch(btf: BusinessTransactionFormat, order_data: bytes) -> str 
     Raises:
         MessageFormatError: the data is not a readable container or XML document.
     """
-    for document in extract_documents(order_data):
+    for document in extract_documents(order_data, prefix_length=_DOCUMENT_HEAD_LENGTH):
         namespace = iso20022.root_namespace(document)
         delivered = iso20022.message_identifier(namespace)
         if delivered is None:

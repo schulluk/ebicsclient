@@ -24,6 +24,11 @@ and 1.3.1 were never published.
   only after the positive receipt, unless a date range was given. A file the parser
   rejected was then already consumed at the bank and could not be downloaded again. They
   now parse before the receipt, and a `MessageFormatError` sends a negative receipt.
+- A damaged or unusual ZIP container (an encrypted entry, an unsupported compression
+  method, corrupt compressed data) raised the standard library's own exceptions —
+  `RuntimeError`, `NotImplementedError`, `ValueError`, `zlib.error` and others — instead of
+  `MessageFormatError`. Every such failure now raises `MessageFormatError`, so catching
+  `EbicsError` covers it.
 
 ## [1.8.0] - 2026-10-26
 

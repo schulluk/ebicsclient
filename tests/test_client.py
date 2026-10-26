@@ -32,6 +32,7 @@ from ebicsclient.errors import (
     ReturnCodeError,
     TransportError,
 )
+from ebicsclient.formats import container
 from ebicsclient.keys import CertificateUsage
 from ebicsclient.models import (
     CAMT_053,
@@ -589,6 +590,55 @@ def test_default_policy_never_fails_a_raw_download_it_cannot_compare(
     (record,) = caplog.records
     assert "could not be compared" in record.getMessage()
     assert "secret" not in record.getMessage()
+
+
+def test_default_policy_returns_a_zip_with_an_encrypted_entry(
+    keyring: Keyring, bank_keyring: Keyring, caplog: pytest.LogCaptureFixture
+) -> None:
+    # zipfile raises RuntimeError for an encrypted entry. The lenient check must turn that
+    # into a warning, so a raw download returns the bytes as it did before the check existed.
+    archive = bytearray(_statement_zip(f"{_ISO}camt.053.001.08"))
+    archive[archive.find(b"PK\x03\x04") + 6] |= 0x01
+    archive[archive.rfind(b"PK\x01\x02") + 8] |= 0x01
+    responses = make_download_responses(keyring, bytes(archive), bank_keyring=bank_keyring)
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with caplog.at_level(logging.WARNING, logger="ebicsclient.client"):
+        assert client.download(CAMT_053) == bytes(archive)
+    assert _receipt_code(transport.posts[-1]) == "0"
+    (record,) = caplog.records
+    assert "could not be compared" in record.getMessage()
+
+
+def test_the_version_check_inflates_only_the_head_of_each_document(
+    keyring: Keyring, bank_keyring: Keyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A raw download has no parse step, so the version check is the only reader of the ZIP:
+    # it must stop at the head of each entry instead of inflating the whole statement.
+    filler = "<Ntry/>" * 50_000  # about 350 KB inflated
+    document = (
+        f'<Document xmlns="{_ISO}camt.053.001.08"><BkToCstmrStmt>{filler}</BkToCstmrStmt>'
+        "</Document>"
+    ).encode()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("statement.xml", document)
+    read_lengths: list[int] = []
+    original_read_entry = container._read_entry
+
+    def recording_read_entry(
+        archive: zipfile.ZipFile, name: str, prefix_length: int | None
+    ) -> bytes:
+        data = original_read_entry(archive, name, prefix_length)
+        read_lengths.append(len(data))
+        return data
+
+    monkeypatch.setattr(container, "_read_entry", recording_read_entry)
+    responses = make_download_responses(keyring, buffer.getvalue(), bank_keyring=bank_keyring)
+    client, _ = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), version_policy=VersionPolicy.STRICT
+    )
+    client.download(CAMT_053)
+    assert read_lengths == [64 * 1024]
 
 
 def _upload_response(

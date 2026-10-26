@@ -55,6 +55,12 @@ def test_a_document_without_a_namespace_has_none() -> None:
     assert root_namespace(b"<Document/>") is None
 
 
+@pytest.mark.parametrize("document", [b"<x:Document/>", b'<x:Document xmlns="urn:a"/>'])
+def test_a_root_with_an_undeclared_prefix_has_no_namespace(document: bytes) -> None:
+    # lxml builds such a root with the tag "x:Document", which etree.QName cannot name.
+    assert root_namespace(document) is None
+
+
 @pytest.mark.parametrize("document", [b"", b"not XML", b"<"])
 def test_unreadable_xml_raises(document: bytes) -> None:
     with pytest.raises(MessageFormatError):
