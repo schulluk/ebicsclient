@@ -43,6 +43,7 @@ Homepage = "https://ebicsclient.miniapps.ch"
 Pricing = "https://ebicsclient.miniapps.ch/#pricing"
 Repository = "https://github.com/schulluk/ebicsclient"
 Issues = "https://github.com/schulluk/ebicsclient/issues"
+Changelog = "https://github.com/schulluk/ebicsclient/blob/main/CHANGELOG.md"
 
 # Dev/test tooling — PEP 735, not published to consumers. See docs/06.
 [dependency-groups]
