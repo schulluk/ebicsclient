@@ -3,7 +3,8 @@
 camt.053 statements (``BkToCstmrStmt/Stmt``), camt.052 intraday reports
 (``BkToCstmrAcctRpt/Rpt``), and camt.054 debit/credit notifications
 (``BkToCstmrDbtCdtNtfctn/Ntfctn``) all share one core shape: an identification, an
-account, and booking entries — statements and reports additionally carry balances. This
+account, and booking entries with their single transactions (``NtryDtls/TxDtls``) —
+statements and reports additionally carry balances. This
 module holds that shared machinery; the thin per-type modules
 (:mod:`~ebicsclient.formats.camt053`, :mod:`~ebicsclient.formats.camt052`,
 :mod:`~ebicsclient.formats.camt054`) only name their wrapper elements and models.
@@ -20,7 +21,14 @@ from decimal import Decimal, InvalidOperation
 from lxml import etree
 
 from ebicsclient.errors import MessageFormatError
-from ebicsclient.models import Balance, CreditDebit, Entry, Statement
+from ebicsclient.models import (
+    Balance,
+    CreditDebit,
+    CreditorReference,
+    Entry,
+    Statement,
+    TransactionDetails,
+)
 
 _DOCUMENT = "Document"
 # Closing/opening booked balances are selected by their ISO external balance-type code.
@@ -78,7 +86,11 @@ def identification(item: etree._Element, namespace: str) -> str:
 
 def iban(item: etree._Element, namespace: str) -> str | None:
     """Read the account IBAN (``Acct/Id/IBAN``), or ``None`` if another id is used."""
-    account = optional_child(item, namespace, "Acct")
+    return _account_iban(optional_child(item, namespace, "Acct"), namespace)
+
+
+def _account_iban(account: etree._Element | None, namespace: str) -> str | None:
+    # A cash account's Id is a choice of IBAN or another identification (Othr).
     if account is None:
         return None
     account_id = optional_child(account, namespace, "Id")
@@ -123,7 +135,97 @@ def _parse_entry(entry: etree._Element, namespace: str) -> Entry:
         booking_date=_optional_date(entry, namespace, "BookgDt"),
         value_date=_optional_date(entry, namespace, "ValDt"),
         reference=text(reference) if reference is not None else None,
+        transactions=tuple(
+            _parse_transaction(transaction, namespace)
+            for details in children(entry, namespace, "NtryDtls")
+            for transaction in children(details, namespace, "TxDtls")
+        ),
     )
+
+
+def _parse_transaction(transaction: etree._Element, namespace: str) -> TransactionDetails:
+    # EntryTransaction4 (version 04) and EntryTransaction10 (version 08) share every element
+    # read here. Amt and CdtDbtInd are mandatory in 04 and optional in 08.
+    amount: Decimal | None = None
+    currency: str | None = None
+    if optional_child(transaction, namespace, "Amt") is not None:
+        amount, currency = _amount(transaction, namespace)
+    credit_debit = (
+        _credit_debit(transaction, namespace)
+        if optional_child(transaction, namespace, "CdtDbtInd") is not None
+        else None
+    )
+    references = optional_child(transaction, namespace, "Refs")
+    parties = optional_child(transaction, namespace, "RltdPties")
+    remittance = optional_child(transaction, namespace, "RmtInf")
+    structured = children(remittance, namespace, "Strd") if remittance is not None else []
+    unstructured = children(remittance, namespace, "Ustrd") if remittance is not None else []
+    return TransactionDetails(
+        amount=amount,
+        currency=currency,
+        credit_debit=credit_debit,
+        account_servicer_reference=_optional_text(references, namespace, "AcctSvcrRef"),
+        message_id=_optional_text(references, namespace, "MsgId"),
+        payment_information_id=_optional_text(references, namespace, "PmtInfId"),
+        instruction_id=_optional_text(references, namespace, "InstrId"),
+        end_to_end_id=_optional_text(references, namespace, "EndToEndId"),
+        debtor_name=_party_name(parties, namespace, "Dbtr"),
+        debtor_iban=_party_account_iban(parties, namespace, "DbtrAcct"),
+        creditor_name=_party_name(parties, namespace, "Cdtr"),
+        creditor_iban=_party_account_iban(parties, namespace, "CdtrAcct"),
+        creditor_references=tuple(
+            _creditor_reference(element, namespace)
+            for block in structured
+            for element in children(block, namespace, "CdtrRefInf")
+        ),
+        remittance_information=tuple(text(line) for line in unstructured),
+        additional_remittance_information=tuple(
+            text(line) for block in structured for line in children(block, namespace, "AddtlRmtInf")
+        ),
+    )
+
+
+def _party_name(parties: etree._Element | None, namespace: str, role: str) -> str | None:
+    if parties is None:
+        return None
+    party = optional_child(parties, namespace, role)
+    if party is None:
+        return None
+    # Version 08 wraps the party in a Party40Choice: <Pty> (a PartyIdentification135) or
+    # <Agt> (a financial institution, whose FinInstnId is mandatory). Version 04 holds the
+    # PartyIdentification43, and so the name, directly.
+    identification = optional_child(party, namespace, "Pty")
+    if identification is None:
+        agent = optional_child(party, namespace, "Agt")
+        identification = child(agent, namespace, "FinInstnId") if agent is not None else party
+    return _optional_text(identification, namespace, "Nm")
+
+
+def _party_account_iban(parties: etree._Element | None, namespace: str, role: str) -> str | None:
+    if parties is None:
+        return None
+    return _account_iban(optional_child(parties, namespace, role), namespace)
+
+
+def _creditor_reference(element: etree._Element, namespace: str) -> CreditorReference:
+    # CreditorReferenceInformation2: Tp and Ref are both optional; within Tp, CdOrPrtry is a
+    # choice of an ISO code (Cd) or a proprietary text (Prtry).
+    reference_type = optional_child(element, namespace, "Tp")
+    code_or_proprietary = (
+        child(reference_type, namespace, "CdOrPrtry") if reference_type is not None else None
+    )
+    return CreditorReference(
+        reference=_optional_text(element, namespace, "Ref"),
+        type_code=_optional_text(code_or_proprietary, namespace, "Cd"),
+        proprietary_type=_optional_text(code_or_proprietary, namespace, "Prtry"),
+    )
+
+
+def _optional_text(parent: etree._Element | None, namespace: str, local_name: str) -> str | None:
+    if parent is None:
+        return None
+    element = optional_child(parent, namespace, local_name)
+    return text(element) if element is not None else None
 
 
 def _status(entry: etree._Element, namespace: str) -> str:

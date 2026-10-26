@@ -64,7 +64,8 @@ round-trip, certificate-profile onboarding, and key rotation — are in
 ## What it does
 
 Key ceremony (INI/HIA/HPB) and key rotation without a new letter (PUB/HCA/HCS), statement/report
-downloads (camt.053/052/054, pain.002) with optional dated ranges and an opt-in check that the
+downloads (camt.053/052/054, pain.002) with optional dated ranges, each booking resolved into its
+single transactions (references, payer, remittance information), an opt-in check that the
 bank delivered the requested message version (`VersionPolicy.STRICT`), payment uploads
 (pain.001), and the bank's registered data (HTD/HKD) and parameters (HPD) — read and write
 validated live against ZKB. Pure Python (`cryptography`, `lxml`), no PHP/Java sidecar. Not yet built: multi-person

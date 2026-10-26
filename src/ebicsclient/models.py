@@ -417,6 +417,95 @@ class Balance:
     date: datetime.date
 
 
+#: ISO 20022 document-type code (``DocumentType3Code``) of an ISO 11649 structured creditor
+#: reference (``RF…``), carried in ``CdtrRefInf/Tp/CdOrPrtry/Cd``.
+CREDITOR_REFERENCE_TYPE_SCOR = "SCOR"
+#: Swiss proprietary creditor-reference type (``CdOrPrtry/Prtry``) of a 27-digit QR reference
+#: (ZKB ISO 20022 handbook, section 10.7.3).
+CREDITOR_REFERENCE_TYPE_QR = "QRR"
+#: Swiss proprietary creditor-reference type (``CdOrPrtry/Prtry``) of an ESR-format reference,
+#: which LSV+ collections carry (ZKB ISO 20022 handbook, section 10.7.3).
+CREDITOR_REFERENCE_TYPE_ISR = "ISR Reference"
+
+
+@dataclass(frozen=True, slots=True)
+class CreditorReference:
+    """A structured creditor reference (``RmtInf/Strd/CdtrRefInf``), such as a QR reference.
+
+    The reference the payee put on the invoice, which the payer quoted when paying. It is what
+    matches an incoming payment to its invoice. The type is either an ISO code or a
+    proprietary text, never both; see the ``CREDITOR_REFERENCE_TYPE_*`` constants.
+
+    Attributes:
+        reference: The reference (``Ref``), e.g. a 27-digit QR reference or an ISO 11649
+            ``RF`` reference, or ``None`` if the bank sent only the type.
+        type_code: The ISO document-type code (``Tp/CdOrPrtry/Cd``), e.g. ``"SCOR"``, or
+            ``None`` if the type is proprietary or absent.
+        proprietary_type: The proprietary type (``Tp/CdOrPrtry/Prtry``), e.g. ``"QRR"`` or
+            ``"ISR Reference"`` in Swiss reports, or ``None`` if the type is a code or absent.
+    """
+
+    reference: str | None
+    type_code: str | None
+    proprietary_type: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TransactionDetails:
+    """One single transaction of a booking entry (``NtryDtls/TxDtls``).
+
+    A collective booking, for example all QR-bill credits of a day or the debits of one
+    payment file, is one entry for the total; its transaction details carry each payment with
+    its own amount, references, parties and remittance information. A single booking usually
+    carries one. Every field the bank omitted is ``None`` or empty.
+
+    Attributes:
+        amount: The transaction amount, as an exact decimal, or ``None`` if omitted
+            (camt version 08 makes it optional). It is in the transaction's own currency,
+            which can differ from the entry's: a USD payment booked to a CHF account reports
+            the USD amount here.
+        currency: The ISO 4217 currency code of ``amount``, or ``None`` with it.
+        credit_debit: Whether the transaction credits or debits the account, or ``None`` if
+            omitted.
+        account_servicer_reference: The bank's own reference for the transaction
+            (``Refs/AcctSvcrRef``), or ``None``.
+        message_id: The message ID of the original payment message (``Refs/MsgId``), e.g. a
+            pain.001 group header's, or ``None``.
+        payment_information_id: The original payment block's ID (``Refs/PmtInfId``), or
+            ``None``.
+        instruction_id: The original instruction ID (``Refs/InstrId``), or ``None``.
+        end_to_end_id: The originator's end-to-end ID (``Refs/EndToEndId``), or ``None``.
+        debtor_name: The payer's name (``RltdPties/Dbtr``), or ``None``.
+        debtor_iban: The payer's IBAN (``RltdPties/DbtrAcct``), or ``None`` if absent or
+            identified otherwise.
+        creditor_name: The payee's name (``RltdPties/Cdtr``), or ``None``.
+        creditor_iban: The payee's IBAN (``RltdPties/CdtrAcct``), or ``None`` if absent or
+            identified otherwise.
+        creditor_references: The structured creditor references (``RmtInf/Strd/CdtrRefInf``),
+            in document order; usually one, empty if the payment carried none.
+        remittance_information: The unstructured remittance information lines
+            (``RmtInf/Ustrd``), in document order.
+        additional_remittance_information: The additional remittance information of the
+            structured blocks (``RmtInf/Strd/AddtlRmtInf``), in document order.
+    """
+
+    amount: Decimal | None
+    currency: str | None
+    credit_debit: CreditDebit | None
+    account_servicer_reference: str | None
+    message_id: str | None
+    payment_information_id: str | None
+    instruction_id: str | None
+    end_to_end_id: str | None
+    debtor_name: str | None
+    debtor_iban: str | None
+    creditor_name: str | None
+    creditor_iban: str | None
+    creditor_references: tuple[CreditorReference, ...]
+    remittance_information: tuple[str, ...]
+    additional_remittance_information: tuple[str, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class Entry:
     """One booking entry in an account statement.
@@ -429,6 +518,9 @@ class Entry:
         booking_date: The booking date, or ``None`` if the statement omitted it.
         value_date: The value date, or ``None`` if the statement omitted it.
         reference: The account-servicer reference, or ``None`` if absent.
+        transactions: The single transactions behind the entry (``NtryDtls/TxDtls``), in
+            document order. Empty when the bank sent no details, which for Swiss banks
+            depends on the report and its settings.
     """
 
     amount: Decimal
@@ -438,6 +530,7 @@ class Entry:
     booking_date: datetime.date | None
     value_date: datetime.date | None
     reference: str | None
+    transactions: tuple[TransactionDetails, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

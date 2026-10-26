@@ -806,8 +806,10 @@ class Client:
 
         A convenience over :meth:`download` for ``REP/camt.054``. Pass a variant BTF (the
         same tuple with a ``service_option`` such as ``"XQRR"``/``"XSCR"``) for the Swiss
-        collective-resolution advices. The bank's keys must already be available (call
-        :meth:`hpb` first).
+        collective-resolution advices: each entry's ``transactions`` lists the single
+        payments of a collective booking with their references, payers and remittance
+        information (:class:`~ebicsclient.TransactionDetails`). The bank's keys must already
+        be available (call :meth:`hpb` first).
 
         Args:
             btf: The camt.054 Business Transaction Format; defaults to the plain ``CAMT_054``.

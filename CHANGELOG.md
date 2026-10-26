@@ -16,6 +16,15 @@ and 1.3.1 were never published.
   sends a negative receipt, so the data stays at the bank. The default,
   `VersionPolicy.ACCEPT_ANY`, logs a mismatch as a warning and returns the data.
 - BTF constants `CAMT_054_BOOKING_INFORMATION` and `CAMT_054_COLLECTIVE_DEBITS`.
+- `Entry.transactions` lists the single transactions behind a booking entry
+  (`NtryDtls/TxDtls`) as `TransactionDetails`: the amount, the references (message,
+  payment, instruction and end-to-end IDs, and the bank's own), the payer's and payee's
+  names and IBANs, the structured creditor references (`CreditorReference`, such as a QR,
+  SCOR or LSV+ reference) and the remittance information. A collective booking, such as a
+  day's QR-bill credits, can now be matched to its invoices. The camt.052, camt.053 and
+  camt.054 parsers fill it for message versions 04 and 08. It was validated live against
+  the ZKB test platform, except for a party that is a bank and an account without an IBAN,
+  which are checked against the ISO 20022 schema only.
 - Python 3.15 is now supported and tested in CI, like 3.11 to 3.14.
 
 ### Fixed

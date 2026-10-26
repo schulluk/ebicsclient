@@ -6,8 +6,8 @@ file: QR-bill payments with a QR reference (``QRR``) or an ISO 11649 creditor re
 (``LSV``). The file is submitted as the BTF ``OTH / BIL / CH004TPS / csv`` (ZKB order type
 ``XTC``; test-platform manual, section 2.3.1 and table 3). The platform books the credits and
 reports them in camt.052, camt.053 and camt.054 — which makes this loop the live oracle for the
-library's camt parsers: the amounts going in are known, the bank's reports coming out are not
-produced by this library.
+library's camt parsers: the amounts, references, payers and remittance texts going in are known,
+the bank's reports coming out are not produced by this library.
 
 Steps:
 
@@ -15,7 +15,9 @@ Steps:
     upload   build the CSV, upload it over EBICS, and record what was sent (manifest.json)
     fetch    list the order types with data waiting (HAA), download each one, store the raw
              order data, parse every camt/pain message, and reconcile the credits against
-             the run's manifest
+             the run's manifest: each product's booking, then each payment's single
+             transaction (``NtryDtls/TxDtls``) with its reference, amount, payer and
+             remittance text
 
     uv run python tools/zkb-incoming-payments.py upload --iban CH..
     # ... the platform needs 10-30 seconds to process the file ...
@@ -53,10 +55,16 @@ from ebicsclient import (
     Notification,
     ReturnCodeError,
     Statement,
+    TransactionDetails,
     User,
     load_keyring,
 )
 from ebicsclient.formats import camt052, camt053, camt054, pain002
+from ebicsclient.models import (
+    CREDITOR_REFERENCE_TYPE_ISR,
+    CREDITOR_REFERENCE_TYPE_QR,
+    CREDITOR_REFERENCE_TYPE_SCOR,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_ENV_FILE = _REPO_ROOT.parent / "local" / ".env"
@@ -122,6 +130,16 @@ class Product(StrEnum):
     CREDITOR_REFERENCE = "SCOR"
     WITHOUT_REFERENCE = "NON"
     DIRECT_DEBIT = "LSV"
+
+
+# How the camt reports type each product's reference, as (code, proprietary type) (ZKB ISO
+# 20022 handbook, section 10.7.3): the ISO code SCOR, or the proprietary texts QRR and
+# "ISR Reference" (LSV+).
+_EXPECTED_REFERENCE_TYPE: dict[Product, tuple[str | None, str | None]] = {
+    Product.QR_REFERENCE: (None, CREDITOR_REFERENCE_TYPE_QR),
+    Product.CREDITOR_REFERENCE: (CREDITOR_REFERENCE_TYPE_SCOR, None),
+    Product.DIRECT_DEBIT: (None, CREDITOR_REFERENCE_TYPE_ISR),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,7 +286,8 @@ def build_scenario(run_stamp: str) -> tuple[SimulatedPayment, ...]:
     The amounts carry cents so a misread decimal separator shows up in the reconciliation.
 
     Args:
-        run_stamp: 14 digits (``YYYYMMDDHHMMSS``) that make this run's references unique.
+        run_stamp: 14 digits (``YYYYMMDDHHMMSS``) that make this run's references unique,
+            and the remittance text of the ``NON`` payment, which has no reference.
 
     Returns:
         The payments, in CSV row order.
@@ -295,13 +314,16 @@ def build_scenario(run_stamp: str) -> tuple[SimulatedPayment, ...]:
 
     qr = Product.QR_REFERENCE
     scor = Product.CREDITOR_REFERENCE
+    unreferenced = Product.WITHOUT_REFERENCE
     return (
         SimulatedPayment(qr, Decimal("1000.00"), qr_reference(1), debtors[0], "Rechnung 1"),
         SimulatedPayment(qr, Decimal("250.50"), qr_reference(2), debtors[1], "Rechnung 2"),
         SimulatedPayment(qr, Decimal("75.25"), qr_reference(3), debtors[2]),
         SimulatedPayment(scor, Decimal("300.00"), scor_reference(1), debtors[0]),
         SimulatedPayment(scor, Decimal("120.75"), scor_reference(2), debtors[1]),
-        SimulatedPayment(Product.WITHOUT_REFERENCE, Decimal("42.10"), None, debtors[2], "Spende"),
+        # Without a reference, only the text tells this run's NON credit from an earlier
+        # run's, should that one still be waiting at the bank.
+        SimulatedPayment(unreferenced, Decimal("42.10"), None, debtors[2], f"Spende {run_stamp}"),
         SimulatedPayment(Product.DIRECT_DEBIT, Decimal("500.00"), lsv_reference(1), debtors[0]),
         SimulatedPayment(Product.DIRECT_DEBIT, Decimal("89.90"), lsv_reference(2), debtors[1]),
     )
@@ -418,6 +440,8 @@ def step_upload(iban: str, runs_directory: Path) -> int:
                 "product": payment.product.value,
                 "amount": f"{payment.amount:.2f}",
                 "reference": payment.reference,
+                "debtor_name": payment.debtor.name,
+                "remittance_information": payment.remittance_information,
             }
             for payment in payments
         ],
@@ -446,7 +470,7 @@ def step_fetch(runs_directory: Path, run_directory: Path | None) -> int:
     for btf in order_types:
         print(f"  {_label(btf)}")
 
-    results: list[_Download] = []
+    results: list[Download] = []
     failures = 0
     for btf in order_types:
         fetched, failed = _download_all(client, btf, downloads, start_index=len(results) + 1)
@@ -459,7 +483,9 @@ def step_fetch(runs_directory: Path, run_directory: Path | None) -> int:
 
     manifest_path = target / _MANIFEST_NAME
     if manifest_path.exists():
-        failures += _reconcile(_load_manifest(manifest_path), results)
+        payments = _load_manifest(manifest_path)
+        failures += _reconcile(payments, results)
+        failures += reconcile_transactions(payments, results)
     else:
         print(f"\nNo {_MANIFEST_NAME} in {target}: nothing to reconcile against.")
     return 1 if failures else 0
@@ -471,8 +497,17 @@ def step_fetch(runs_directory: Path, run_directory: Path | None) -> int:
 
 
 @dataclass(frozen=True, slots=True)
-class _Download:
-    """One downloaded order and what its parser made of it."""
+class Download:
+    """One downloaded order and what its parser made of it.
+
+    Attributes:
+        btf: The BTF it was downloaded under.
+        path: Where its raw order data was stored.
+        statements: The parsed camt.052/camt.053 statements, if any.
+        notifications: The parsed camt.054 notifications, if any.
+        status_report_count: How many pain.002 reports it held.
+        archive_members: The member names of any other ZIP archive.
+    """
 
     btf: BusinessTransactionFormat
     path: Path
@@ -484,12 +519,12 @@ class _Download:
 
 def _download_all(
     client: Client, btf: BusinessTransactionFormat, downloads: Path, *, start_index: int
-) -> tuple[list[_Download], int]:
+) -> tuple[list[Download], int]:
     """Download one BTF until the bank has nothing left; return the results and failures."""
-    results: list[_Download] = []
+    results: list[Download] = []
     for attempt in range(_MAX_DOWNLOADS_PER_ORDER_TYPE):
         path = downloads / f"{start_index + attempt:02d}-{_file_stem(btf)}"
-        holder: list[_Download] = []
+        holder: list[Download] = []
         try:
             # Store and parse inside the pre-receipt hook: a parser failure then sends a
             # negative receipt and the bank keeps the data, while the raw bytes are on disk.
@@ -509,7 +544,7 @@ def _download_all(
 
 
 def _store_and_parse(
-    btf: BusinessTransactionFormat, path_stem: Path, holder: list[_Download]
+    btf: BusinessTransactionFormat, path_stem: Path, holder: list[Download]
 ) -> Callable[[bytes], None]:
     def store_and_parse(order_data: bytes) -> None:
         suffix = ".zip" if order_data.startswith(b"PK\x03\x04") else ".xml"
@@ -520,23 +555,23 @@ def _store_and_parse(
     return store_and_parse
 
 
-def _parse(btf: BusinessTransactionFormat, path: Path, order_data: bytes) -> _Download:
+def _parse(btf: BusinessTransactionFormat, path: Path, order_data: bytes) -> Download:
     if btf.message_name == "camt.053":
-        return _Download(btf, path, statements=tuple(camt053.parse(order_data)))
+        return Download(btf, path, statements=tuple(camt053.parse(order_data)))
     if btf.message_name == "camt.052":
-        return _Download(btf, path, statements=tuple(camt052.parse(order_data)))
+        return Download(btf, path, statements=tuple(camt052.parse(order_data)))
     if btf.message_name == "camt.054":
-        return _Download(btf, path, notifications=tuple(camt054.parse(order_data)))
+        return Download(btf, path, notifications=tuple(camt054.parse(order_data)))
     if btf.message_name == "pain.002":
-        return _Download(btf, path, status_report_count=len(pain002.parse(order_data)))
+        return Download(btf, path, status_report_count=len(pain002.parse(order_data)))
     members: tuple[str, ...] = ()
     if path.suffix == ".zip":
         with zipfile.ZipFile(path) as archive:
             members = tuple(sorted(archive.namelist()))
-    return _Download(btf, path, archive_members=members)
+    return Download(btf, path, archive_members=members)
 
 
-def _print_download(result: _Download) -> None:
+def _print_download(result: Download) -> None:
     print(f"{_label(result.btf)} -> {result.path.name}")
     for statement in result.statements:
         print(f"  {statement.identification}: {len(statement.entries)} entries")
@@ -547,6 +582,8 @@ def _print_download(result: _Download) -> None:
             )
         for entry in statement.entries:
             print(f"    {_entry_text(entry)}")
+            for transaction in entry.transactions:
+                print(f"      {_transaction_text(transaction)}")
         reconciliation = _balance_reconciliation(statement)
         if reconciliation is not None:
             print(f"    balances reconcile: {reconciliation}")
@@ -554,6 +591,8 @@ def _print_download(result: _Download) -> None:
         print(f"  {notification.identification}: {len(notification.entries)} entries")
         for entry in notification.entries:
             print(f"    {_entry_text(entry)}")
+            for transaction in entry.transactions:
+                print(f"      {_transaction_text(transaction)}")
     if result.status_report_count:
         print(f"  {result.status_report_count} payment status report(s)")
     for member in result.archive_members:
@@ -565,6 +604,20 @@ def _entry_text(entry: Entry) -> str:
     return (
         f"{entry.credit_debit.value} {entry.amount:>12} {entry.currency} "
         f"{entry.status} booked {booking} ref {entry.reference or '-'}"
+    )
+
+
+def _transaction_text(transaction: TransactionDetails) -> str:
+    direction = transaction.credit_debit.value if transaction.credit_debit is not None else "-"
+    amount = (
+        f"{transaction.amount} {transaction.currency}" if transaction.amount is not None else "-"
+    )
+    references = ", ".join(
+        reference.reference or "-" for reference in transaction.creditor_references
+    )
+    return (
+        f"transaction {direction} {amount} ref {references or '-'} "
+        f"payer {transaction.debtor_name or '-'}"
     )
 
 
@@ -593,15 +646,35 @@ def _signed(amount: Decimal, credit_debit: CreditDebit) -> Decimal:
 
 
 @dataclass(frozen=True, slots=True)
-class _ManifestPayment:
+class ManifestPayment:
+    """One simulated payment as the run's manifest recorded it.
+
+    Attributes:
+        product: The payment product.
+        amount: The amount sent.
+        reference: The reference sent; ``None`` for ``NON``.
+        debtor_name: The payer's name sent, or ``None`` in a manifest that predates it.
+        remittance_information: The remittance text sent, or ``None`` if there was none or
+            the manifest predates it.
+    """
+
     product: Product
     amount: Decimal
+    reference: str | None
+    debtor_name: str | None = None
+    remittance_information: str | None = None
 
 
-def _load_manifest(path: Path) -> list[_ManifestPayment]:
+def _load_manifest(path: Path) -> list[ManifestPayment]:
     data = json.loads(path.read_text())
     return [
-        _ManifestPayment(Product(payment["product"]), Decimal(payment["amount"]))
+        ManifestPayment(
+            Product(payment["product"]),
+            Decimal(payment["amount"]),
+            payment.get("reference"),
+            payment.get("debtor_name"),
+            payment.get("remittance_information"),
+        )
         for payment in data["payments"]
     ]
 
@@ -613,7 +686,7 @@ def _expected_totals(payments: Sequence[SimulatedPayment]) -> dict[Product, Deci
     return totals
 
 
-def _reconcile(payments: list[_ManifestPayment], results: list[_Download]) -> int:
+def _reconcile(payments: list[ManifestPayment], results: list[Download]) -> int:
     """Find each product's credits in the reports; return how many products went missing.
 
     A product's credits count as reported by a message when the message has a credit entry
@@ -643,7 +716,113 @@ def _reconcile(payments: list[_ManifestPayment], results: list[_Download]) -> in
     return missing
 
 
-def _credit_entries(result: _Download) -> list[Entry]:
+def reconcile_transactions(
+    payments: Sequence[ManifestPayment], results: Sequence[Download]
+) -> int:
+    """Find each payment's single transaction in the reports; return how many failed.
+
+    A payment with a reference is identified by it: a transaction carrying the same creditor
+    reference. A ``NON`` payment has none, so it is identified as a credit transaction
+    without a reference, with the payment's amount and remittance text. Each transaction
+    found must then match what was sent: a credit, the amount, the product's reference type,
+    the payer's name, and the remittance text (in ``Strd/AddtlRmtInf`` for a referenced
+    payment, in ``Ustrd`` for ``NON``).
+
+    A payment fails when no report carries its transaction, or when one carries it with a
+    difference. The platform resolves collective credits in camt.054 only while the QRR,
+    SCOR and LSV collective resolutions are enabled on its Defaultwerte page (docs/09).
+
+    Args:
+        payments: The payments the run sent, from its manifest.
+        results: Every parsed download of the fetch step.
+
+    Returns:
+        The number of payments that were not found or differed.
+    """
+    print("\nSingle transactions (NtryDtls/TxDtls) against the manifest:")
+    failures = 0
+    for payment in payments:
+        found_in: dict[str, int] = {}
+        differences: list[str] = []
+        for result in results:
+            for transaction in _transactions(result):
+                if not _identifies(transaction, payment):
+                    continue
+                found = _differences(transaction, payment)
+                label = _label(result.btf)
+                if found:
+                    differences.append(f"{label}: {'; '.join(found)}")
+                else:
+                    found_in[label] = found_in.get(label, 0) + 1
+        print(
+            f"  {payment.product.value:<5} {payment.amount:>10} "
+            f"ref {payment.reference or '-'} payer {payment.debtor_name or '-'}"
+        )
+        for label, copies in found_in.items():
+            suffix = f" ({copies} copies)" if copies > 1 else ""
+            print(f"        matches {label}{suffix}")
+        for difference in differences:
+            print(f"        DIFFERS in {difference}")
+        if not found_in and not differences:
+            print("        NOT FOUND in the transaction details of any report")
+        if differences or not found_in:
+            failures += 1
+    return failures
+
+
+def _transactions(result: Download) -> list[TransactionDetails]:
+    entries = [entry for statement in result.statements for entry in statement.entries]
+    entries += [entry for notification in result.notifications for entry in notification.entries]
+    return [transaction for entry in entries for transaction in entry.transactions]
+
+
+def _identifies(transaction: TransactionDetails, payment: ManifestPayment) -> bool:
+    if payment.reference is not None:
+        return any(
+            reference.reference == payment.reference
+            for reference in transaction.creditor_references
+        )
+    return (
+        transaction.credit_debit is CreditDebit.CREDIT
+        and not transaction.creditor_references
+        and transaction.amount == payment.amount
+        and (
+            payment.remittance_information is None
+            or payment.remittance_information in transaction.remittance_information
+        )
+    )
+
+
+def _differences(transaction: TransactionDetails, payment: ManifestPayment) -> list[str]:
+    differences: list[str] = []
+    if transaction.credit_debit is not CreditDebit.CREDIT:
+        differences.append(f"direction {transaction.credit_debit}, sent a credit")
+    if transaction.amount != payment.amount:
+        differences.append(f"amount {transaction.amount}, sent {payment.amount}")
+    expected_type = _EXPECTED_REFERENCE_TYPE.get(payment.product)
+    if expected_type is not None:
+        for reference in transaction.creditor_references:
+            received_type = (reference.type_code, reference.proprietary_type)
+            if reference.reference == payment.reference and received_type != expected_type:
+                differences.append(
+                    f"reference type {received_type}, expected {expected_type} (code, proprietary)"
+                )
+    if payment.debtor_name is not None and transaction.debtor_name != payment.debtor_name:
+        differences.append(f"payer {transaction.debtor_name!r}, sent {payment.debtor_name!r}")
+    if payment.remittance_information is not None:
+        received = (
+            transaction.remittance_information
+            if payment.reference is None
+            else transaction.additional_remittance_information
+        )
+        if received != (payment.remittance_information,):
+            differences.append(
+                f"remittance text {received!r}, sent {payment.remittance_information!r}"
+            )
+    return differences
+
+
+def _credit_entries(result: Download) -> list[Entry]:
     entries = [entry for statement in result.statements for entry in statement.entries]
     entries += [entry for notification in result.notifications for entry in notification.entries]
     return [entry for entry in entries if entry.credit_debit is CreditDebit.CREDIT]

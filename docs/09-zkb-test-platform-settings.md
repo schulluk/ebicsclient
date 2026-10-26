@@ -90,6 +90,7 @@ These are the entries our camt.053 parser will encounter in the downloaded state
 | camt.053 parsing (balances, entries) | Standard-Buchungen | `formats/camt053.py` | ✅ live |
 | Intraday statement (camt.052) | produced since at least 2026-10-26 (the table above predates it) | `download_intraday_statements()` | ✅ live |
 | Booking advices (camt.054 incl. QRR/SCOR/LSV) | QRR/SCOR/LSV collective resolutions enabled | `download_booking_advices(btf)` | ✅ live; see the simulation section below |
+| Single transactions of a booking (references, payer, remittance text) | QRR/SCOR/LSV collective resolutions enabled | `Entry.transactions` | ✅ live (version 04 from simulated credits, version 08 from a pain.001 batch debit) |
 | pain.001 upload | pain.001.001.09.ch.03 | `client.upload(PAIN_001, …)` | ✅ live (processed since the A006 fix) |
 | pain.002 status back | validation message on; channel = Datalink EBICS | `download_payment_status_reports()` | ✅ live |
 | Reject simulation (negative path) | every third transaction | — | ✅ live (`PART`, two rejected) |
@@ -104,7 +105,9 @@ creditor reference (`SCOR`), credits without a reference (`NON`), and LSV+ colle
 from a CSV file (manual section 2.3.1), uploaded over EBICS as `OTH / BIL / CH004TPS / csv`
 (ZKB order type `XTC`). [`tools/zkb-incoming-payments.py`](../tools/zkb-incoming-payments.py)
 builds that file, uploads it, then downloads and parses everything HAA lists and reconciles
-the credits against what it sent.
+the credits against what it sent: each product's booking, then each payment's single
+transaction (`NtryDtls/TxDtls`) with its reference, reference type, amount, payer and
+remittance text. Two runs on 2026-10-26 matched all eight payments exactly.
 
 A run of eight credits (three QRR, two SCOR, one NON, two LSV) was processed within seconds; the
 platform's protocol (`Protokoll.txt`, in the `XTD` archive) reported the file correct. What came
@@ -133,6 +136,13 @@ Three platform behaviours to know:
 - **Every processed file produces its own statement**, not a running one: each camt.053 opens
   at the same balance and holds that file's bookings plus the predefined *Standard-Buchungen*
   (manual section 2.4), which therefore recur in every run.
+- **The camt.052 and camt.053 carry the single transactions of the simulated collective
+  credits too**, although the settings above have the collective-detail options off. So each
+  payment appears three times: in camt.052, in camt.053 and in its camt.054.
+- **A run that is never fetched stays waiting**, and the next `fetch` downloads it with the
+  new one: the ZIPs then hold the documents of both runs. The referenced payments are told
+  apart by their run-specific references, and the `NON` payment by its remittance text,
+  which carries the run stamp.
 
 ## How the simulation is driven (validated 2026-07-05)
 
@@ -198,6 +208,7 @@ rightly, as the 2026-10-26 correction above shows.
 
 1. ~~Ask ZKB support why EBICS-submitted pain.001 files are never processed~~ — resolved
    2026-10-26: the cause was the client's A006 signature, not the platform (see above).
-2. ~~camt.054 booking advices~~ — parsed live since 2026-10-26 (see the simulation section).
-   Still open: why the simulated credits arrive as camt version 04 (check *Simulation nach*
-   on the Defaultwerte page), and exposing the single transactions of a collective booking.
+2. ~~camt.054 booking advices~~ — parsed live since 2026-10-26 (see the simulation section),
+   with the single transactions of each collective booking (`Entry.transactions`). Still
+   open: why the simulated credits arrive as camt version 04 (check *Simulation nach* on the
+   Defaultwerte page).
