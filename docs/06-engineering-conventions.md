@@ -217,5 +217,5 @@ can't get them. The `pyproject.toml` is in the repo, so anyone who clones instal
 
 - SemVer. `CHANGELOG.md` (Keep a Changelog format). Keep the README "Status" current (per CLAUDE.md).
 - Dual-license `LICENSE` with SPDX headers (doc 02).
-- **[soon]** Lightweight GitHub Actions: `ruff` + `mypy` + `pytest` across Python 3.11 / 3.12 / 3.13.
+- Lightweight GitHub Actions: `ruff` + `mypy` + `pytest` across Python 3.11 to 3.15.
   No live-bank calls.

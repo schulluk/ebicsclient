@@ -16,6 +16,7 @@ and 1.3.1 were never published.
   sends a negative receipt, so the data stays at the bank. The default,
   `VersionPolicy.ACCEPT_ANY`, logs a mismatch as a warning and returns the data.
 - BTF constants `CAMT_054_BOOKING_INFORMATION` and `CAMT_054_COLLECTIVE_DEBITS`.
+- Python 3.15 is now supported and tested in CI, like 3.11 to 3.14.
 
 ### Fixed
 
