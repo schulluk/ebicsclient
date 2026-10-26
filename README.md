@@ -64,9 +64,10 @@ round-trip, and certificate-profile onboarding — are in
 ## What it does
 
 Key ceremony (INI/HIA/HPB), statement/report downloads (camt.053/052/054, pain.002) with optional
-dated ranges, and payment uploads (pain.001) — read and write validated live against ZKB. Pure
-Python (`cryptography`, `lxml`), no PHP/Java sidecar. Not yet built: multi-person signatures
-(EDS/VEU), key rotation, and several administrative order types.
+dated ranges, payment uploads (pain.001), and the bank's registered data (HTD/HKD) and
+parameters (HPD) — read and write validated live against ZKB. Pure Python (`cryptography`,
+`lxml`), no PHP/Java sidecar. Not yet built: multi-person signatures (EDS/VEU), key rotation,
+and several administrative order types.
 
 Full capability-by-capability coverage, gaps, and verification status:
 **[docs/13-standard-conformance.md](https://github.com/schulluk/ebicsclient/blob/main/docs/13-standard-conformance.md)**.

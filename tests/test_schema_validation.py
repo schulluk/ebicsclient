@@ -134,7 +134,7 @@ def test_download_receipt_request_validates(
     assert document.findtext(f".//{{{_NS}}}ReceiptCode") == expected_code
 
 
-@pytest.mark.parametrize("admin_order_type", ["HAA", "HTD"])
+@pytest.mark.parametrize("admin_order_type", ["HAA", "HTD", "HKD", "HPD"])
 def test_admin_download_request_validates(
     admin_order_type: str, bank: Bank, user: User, keyring: Keyring
 ) -> None:
@@ -167,3 +167,13 @@ def test_upload_transfer_request_validates(bank: Bank, keyring: Keyring) -> None
         bank, keyring, "A" * 32, 1, "c2VnbWVudA==", last_segment=True
     )
     _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
+
+
+@pytest.mark.parametrize(
+    "fixture", ["hpd_zkb_sample.xml", "hkd_zkb_sample.xml", "hkd_accounts_example.xml"]
+)
+def test_admin_order_data_fixtures_validate(fixture: str) -> None:
+    # The parser tests trust these fixtures, so the XSD vouches for them first — the
+    # hand-written account example especially, which has no live counterpart.
+    document = etree.parse(str(Path(__file__).parent / "data" / fixture))
+    _assert_valid(_schema("ebics_orders_H005.xsd"), document.getroot())

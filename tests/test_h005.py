@@ -8,6 +8,7 @@ import base64
 import datetime
 import hashlib
 import zlib
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,16 @@ from ebicsclient.errors import (
     UnknownReturnCodeError,
 )
 from ebicsclient.keys import CertificateUsage
-from ebicsclient.models import CAMT_053, PAIN_001, Bank, BankKeys, DateRange, Keyring, User
+from ebicsclient.models import (
+    CAMT_053,
+    PAIN_001,
+    AuthorisationLevel,
+    Bank,
+    BankKeys,
+    DateRange,
+    Keyring,
+    User,
+)
 from ebicsclient.protocol import h005
 
 _NS = h005.NAMESPACE
@@ -721,3 +731,204 @@ def test_parse_download_response_rejects_a_segment_number_without_last_segment_f
     etree.SubElement(body, f"{{{_NS}}}ReturnCode").text = "000000"
     with pytest.raises(ProtocolError):
         h005.parse_download_segment_response(etree.tostring(root))
+
+
+_DATA = Path(__file__).parent / "data"
+
+
+def test_parse_bank_parameters_reads_the_real_hpd_response() -> None:
+    # Sanitized from a live ZKB test-platform HPD response (host, URL, name replaced).
+    parameters = h005.parse_bank_parameters((_DATA / "hpd_zkb_sample.xml").read_bytes())
+    (url,) = parameters.urls
+    assert url.url == "https://ebics.example.com/ebicsweb"
+    assert url.valid_from is None
+    assert parameters.institute == "Example Bank"
+    assert parameters.host_id == "EBICSHOST"
+    assert parameters.protocol_versions == ("H002", "H003", "H004", "H005")
+    assert parameters.authentication_versions == ("X001", "X002")
+    assert parameters.encryption_versions == ("E001", "E002")
+    assert parameters.signature_versions == ("A004", "A005", "A006")
+    assert parameters.supports_recovery is True
+    assert parameters.supports_pre_validation is False
+    assert parameters.supports_client_data_download is True
+    assert parameters.supports_downloadable_order_data is True
+
+
+def _hpd(protocol_params: str, access_params: str = "<URL>https://bank.example</URL>") -> bytes:
+    return (
+        f'<HPDResponseOrderData xmlns="{_NS}"><AccessParams>{access_params}'
+        f"<Institute>Bank</Institute></AccessParams><ProtocolParams><Version>"
+        "<Protocol>H005</Protocol><Authentication>X002</Authentication>"
+        "<Encryption>E002</Encryption><Signature>A006</Signature></Version>"
+        f"{protocol_params}</ProtocolParams></HPDResponseOrderData>"
+    ).encode()
+
+
+def test_parse_bank_parameters_treats_an_omitted_flag_as_unsupported_and_a_bare_one_as_supported(
+) -> None:
+    # Spec 9.2: missing parameter = not supported; listed without @supported = supported.
+    parameters = h005.parse_bank_parameters(_hpd("<Recovery/><PreValidation supported='0'/>"))
+    assert parameters.supports_recovery is True
+    assert parameters.supports_pre_validation is False
+    assert parameters.supports_client_data_download is False
+    assert parameters.supports_downloadable_order_data is False
+    assert parameters.host_id is None
+
+
+def test_parse_bank_parameters_reads_a_url_validity_timestamp() -> None:
+    parameters = h005.parse_bank_parameters(
+        _hpd("", '<URL valid_from="2027-01-01T00:00:00.000Z">https://next.example</URL>')
+    )
+    (url,) = parameters.urls
+    assert url.valid_from == datetime.datetime(2027, 1, 1, tzinfo=datetime.UTC)
+
+
+@pytest.mark.parametrize(
+    ("protocol_params", "access_params"),
+    [
+        ("<Recovery supported='maybe'/>", "<URL>https://bank.example</URL>"),
+        ("", "<URL valid_from='tomorrow'>https://bank.example</URL>"),
+        ("", "<URL> </URL>"),
+        ("", ""),
+    ],
+)
+def test_parse_bank_parameters_fails_closed_on_malformed_data(
+    protocol_params: str, access_params: str
+) -> None:
+    with pytest.raises(ProtocolError):
+        h005.parse_bank_parameters(_hpd(protocol_params, access_params))
+
+
+def test_parse_bank_parameters_rejects_another_document() -> None:
+    with pytest.raises(ProtocolError):
+        h005.parse_bank_parameters(f'<HTDResponseOrderData xmlns="{_NS}"/>'.encode())
+
+
+def test_parse_customer_info_reads_the_real_hkd_response() -> None:
+    # Sanitized from a live ZKB test-platform HKD response (names and IDs replaced).
+    info = h005.parse_customer_info((_DATA / "hkd_zkb_sample.xml").read_bytes())
+    assert info.host_id == "EBICSHOST"
+    assert info.address.name == "Test User"
+    assert info.address.post_code is None
+    assert info.accounts == ()
+    assert len(info.order_types) == 42
+    (subscriber,) = info.subscribers
+    assert subscriber.user_id == "USER1"
+    assert subscriber.user_status == "1"
+    assert len(subscriber.permissions) == 42
+    levels = {
+        permission.admin_order_type: permission.authorisation_level
+        for permission in subscriber.permissions
+    }
+    # Key management carries the transport signature class; downloads carry none.
+    assert levels["HCS"] is AuthorisationLevel.TRANSPORT
+    assert levels["HPD"] is None
+
+
+def test_parse_customer_info_reads_accounts_and_account_bound_permissions() -> None:
+    info = h005.parse_customer_info((_DATA / "hkd_accounts_example.xml").read_bytes())
+    assert info.address.region == "ZH"
+    first, second, third = info.accounts
+    assert first.identification == "account-1"
+    assert first.currency == "CHF"
+    assert first.description == "Current account"
+    assert first.holder == "Example Ltd"
+    (iban,) = first.account_numbers
+    assert (iban.value, iban.international, iban.national_format) == (
+        "CH4200000000000000001",
+        True,
+        None,
+    )
+    (bic,) = first.bank_codes
+    assert (bic.value, bic.international, bic.prefix) == ("EXAMCHZZ", True, None)
+    # No UsageOrderTypes: unrestricted. An empty one: enabled for nothing (spec 9.3.2.1.3).
+    assert first.permitted_services is None
+    assert second.permitted_services == ()
+    assert second.currency == "EUR"  # the schema default
+    (national,) = second.account_numbers
+    assert (national.international, national.national_format) == (False, "other")
+    (national_bank,) = second.bank_codes
+    assert national_bank.national_format == "other"
+    assert third.bank_codes[0].prefix == "DE"
+    assert third.permitted_services is not None
+    assert third.permitted_services[0].message_name == "camt.053"
+
+    signer, second_signer = info.subscribers
+    (permission,) = signer.permissions
+    assert permission.authorisation_level is AuthorisationLevel.FIRST
+    assert permission.account_id == "account-1"
+    assert permission.maximum_amount == Decimal("50000.00")
+    assert permission.maximum_amount_currency == "CHF"
+    assert second_signer.user_status == "6"
+    assert second_signer.name is None
+    limited, download = second_signer.permissions
+    assert limited.authorisation_level is AuthorisationLevel.SECOND
+    assert limited.maximum_amount_currency == "EUR"  # the schema default
+    assert download.authorisation_level is None
+    assert download.maximum_amount is None
+    assert download.maximum_amount_currency is None
+    (order_type,) = info.order_types
+    assert order_type.number_of_signatures_required == 2
+
+
+def _hkd(user_info: str, account_info: str = "") -> bytes:
+    return (
+        f'<HKDResponseOrderData xmlns="{_NS}"><PartnerInfo><AddressInfo/>'
+        f"<BankInfo><HostID>HOST</HostID></BankInfo>{account_info}"
+        "<OrderInfo><AdminOrderType>HKD</AdminOrderType><Description>d</Description></OrderInfo>"
+        f"</PartnerInfo>{user_info}</HKDResponseOrderData>"
+    ).encode()
+
+
+_PERMISSION = "<Permission><AdminOrderType>HKD</AdminOrderType></Permission>"
+
+
+@pytest.mark.parametrize(
+    ("user_info", "account_info"),
+    [
+        ("", ""),
+        (f"<UserInfo><UserID>U</UserID>{_PERMISSION}</UserInfo>", ""),
+        (f"<UserInfo><UserID Status='1'/>{_PERMISSION}</UserInfo>", ""),
+        (
+            "<UserInfo><UserID Status='1'>U</UserID><Permission AuthorisationLevel='Z'>"
+            "<AdminOrderType>BTU</AdminOrderType></Permission></UserInfo>",
+            "",
+        ),
+        (
+            "<UserInfo><UserID Status='1'>U</UserID><Permission>"
+            "<AdminOrderType>BTU</AdminOrderType><MaxAmount>NaN</MaxAmount></Permission>"
+            "</UserInfo>",
+            "",
+        ),
+        (
+            f"<UserInfo><UserID Status='1'>U</UserID>{_PERMISSION}</UserInfo>",
+            "<AccountInfo><AccountNumber>123</AccountNumber></AccountInfo>",
+        ),
+        (
+            f"<UserInfo><UserID Status='1'>U</UserID>{_PERMISSION}</UserInfo>",
+            "<AccountInfo ID='a'/>",
+        ),
+        (
+            f"<UserInfo><UserID Status='1'>U</UserID>{_PERMISSION}</UserInfo>",
+            "<AccountInfo ID='a'><AccountNumber international='yes'>1</AccountNumber>"
+            "</AccountInfo>",
+        ),
+    ],
+)
+def test_parse_customer_info_fails_closed_on_malformed_data(
+    user_info: str, account_info: str
+) -> None:
+    with pytest.raises(ProtocolError):
+        h005.parse_customer_info(_hkd(user_info, account_info))
+
+
+def test_parse_customer_info_rejects_an_htd_document() -> None:
+    with pytest.raises(ProtocolError):
+        h005.parse_customer_info((_DATA / "htd_zkb_sample.xml").read_bytes())
+
+
+def test_parse_subscriber_info_now_reads_the_permission_signature_class() -> None:
+    info = h005.parse_subscriber_info((_DATA / "htd_zkb_sample.xml").read_bytes())
+    uploads = [entry for entry in info.permissions if entry.admin_order_type == "BTU"]
+    assert uploads
+    assert all(entry.authorisation_level is AuthorisationLevel.INDIVIDUAL for entry in uploads)

@@ -17,6 +17,8 @@ Steps, matching the EBICS initialisation ceremony (see docs/05, docs/07):
     pain002    fetch the pain.002 payment status report(s) and print them
     haa        list the order types with data available at the bank
     htd        show the subscriber data registered at the bank
+    hkd        show the customer data and every subscriber registered at the bank
+    hpd        show the bank's EBICS parameters (versions, supported features)
 
 Run each step in order, e.g.::
 
@@ -86,7 +88,7 @@ def main() -> int:
         "step",
         choices=[
             "generate", "ini", "hia", "letter", "hpb", "hashes", "download", "upload",
-            "pain002", "haa", "htd",
+            "pain002", "haa", "htd", "hkd", "hpd",
         ],
     )
     step = parser.parse_args().step
@@ -250,6 +252,44 @@ def _htd() -> int:
     return 0
 
 
+def _hkd() -> int:
+    client = _build_client()
+    _fetch_bank_keys(client)
+    info = client.customer_info()
+    print(f"HKD: host {info.host_id}, customer: {info.address.name}")
+    print(f"  accounts: {len(info.accounts)}, customer order types: {len(info.order_types)}")
+    for account in info.accounts:
+        numbers = ", ".join(number.value for number in account.account_numbers)
+        print(f"  account {account.identification} ({account.currency}): {numbers}")
+    for subscriber in info.subscribers:
+        print(f"  subscriber {subscriber.user_id} (status {subscriber.user_status}), "
+              f"name: {subscriber.name}, permissions: {len(subscriber.permissions)}")
+        for permission in subscriber.permissions:
+            level = permission.authorisation_level
+            print(f"    {permission.admin_order_type:<4} "
+                  f"signature class {level.value if level is not None else '-'}")
+    return 0
+
+
+def _hpd() -> int:
+    client = _build_client()
+    _fetch_bank_keys(client)
+    parameters = client.bank_parameters()
+    print(f"HPD: {parameters.institute} (host {parameters.host_id or '-'})")
+    for url in parameters.urls:
+        valid_from = url.valid_from.isoformat() if url.valid_from is not None else "now"
+        print(f"  URL {url.url} (valid from {valid_from})")
+    print(f"  protocol versions:       {' '.join(parameters.protocol_versions)}")
+    print(f"  authentication versions: {' '.join(parameters.authentication_versions)}")
+    print(f"  encryption versions:     {' '.join(parameters.encryption_versions)}")
+    print(f"  signature versions:      {' '.join(parameters.signature_versions)}")
+    print(f"  recovery: {parameters.supports_recovery}, "
+          f"pre-validation: {parameters.supports_pre_validation}, "
+          f"HKD/HTD: {parameters.supports_client_data_download}, "
+          f"HAA: {parameters.supports_downloadable_order_data}")
+    return 0
+
+
 def _build_client() -> Client:
     return Client(_bank(), _user(), _load_keyring())
 
@@ -317,6 +357,8 @@ _STEPS = {
     "pain002": _pain002,
     "haa": _haa,
     "htd": _htd,
+    "hkd": _hkd,
+    "hpd": _hpd,
 }
 
 

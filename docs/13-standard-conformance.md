@@ -63,8 +63,8 @@ absent, not excluded — unless the **Notes** say otherwise.
 | pain.002 payment status reports — typed parser | Mandated (ISO) | ✅ | spec-vector | |
 | HAA — order types with data available | Mandated | ✅ | live | |
 | HTD — *this subscriber's* data & permissions | Mandated | ✅ | live | |
-| HKD — *customer + all subscribers'* data | Mandated | ❌ | | HTD covers only this subscriber |
-| HPD — bank parameters (limits, supported order types) | Mandated | ❌ | | Cheap + useful for discovering bank limits |
+| HKD — *customer + all subscribers'* data | Mandated | ✅ | live | `customer_info()`; accounts and account-bound permissions are XSD-only (the test subscriber has none) |
+| HPD — bank parameters (versions, optional features) | Mandated | ✅ | live | `bank_parameters()` |
 | HAC — customer protocol / acknowledgements (pain.002 form) | Mandated | ❌ | | Machine-readable action log |
 | PTK — customer protocol (textual) | Mandated | ❌ | | Textual counterpart of HAC |
 | HEV — supported EBICS versions (unsecured discovery) | Mandated | ❌ | | Pre-init version probe |

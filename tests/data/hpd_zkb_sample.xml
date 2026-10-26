@@ -1,0 +1,20 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<HPDResponseOrderData xmlns="urn:org:ebics:H005" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:org:ebics:H005 ebics_orders_H005.xsd">
+    <AccessParams>
+        <URL>https://ebics.example.com/ebicsweb</URL>
+        <Institute>Example Bank</Institute>
+        <HostID>EBICSHOST</HostID>
+    </AccessParams>
+    <ProtocolParams>
+        <Version>
+            <Protocol>H002 H003 H004 H005</Protocol>
+            <Authentication>X001 X002</Authentication>
+            <Encryption>E001 E002</Encryption>
+            <Signature>A004 A005 A006</Signature>
+        </Version>
+        <Recovery supported="true"/>
+        <PreValidation supported="false"/>
+        <ClientDataDownload supported="true"/>
+        <DownloadableOrderData supported="true"/>
+    </ProtocolParams>
+</HPDResponseOrderData>

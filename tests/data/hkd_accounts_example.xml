@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A hand-written HKD response exercising the parts the ZKB test platform never sends
+  (accounts, account-bound permissions, amount limits, several subscribers). Written to the
+  H005 schema (HKDResponseOrderDataType, ebics_orders_H005.xsd) with fictitious values;
+  tests/test_schema_validation.py checks it against the XSD before the parser tests rely on it.
+-->
+<HKDResponseOrderData xmlns="urn:org:ebics:H005">
+    <PartnerInfo>
+        <AddressInfo>
+            <Name>Example Ltd</Name>
+            <Street>Examplestrasse 1</Street>
+            <PostCode>8000</PostCode>
+            <City>Exampletown</City>
+            <Region>ZH</Region>
+            <Country>CH</Country>
+        </AddressInfo>
+        <BankInfo>
+            <HostID>EBICSHOST</HostID>
+        </BankInfo>
+        <AccountInfo ID="account-1" Currency="CHF" Description="Current account">
+            <AccountNumber international="true">CH4200000000000000001</AccountNumber>
+            <BankCode international="true">EXAMCHZZ</BankCode>
+            <AccountHolder>Example Ltd</AccountHolder>
+        </AccountInfo>
+        <AccountInfo ID="account-2">
+            <NationalAccountNumber format="other">0000-1234-5678</NationalAccountNumber>
+            <NationalBankCode format="other">BANK-001</NationalBankCode>
+            <UsageOrderTypes/>
+        </AccountInfo>
+        <AccountInfo ID="account-3" Currency="EUR">
+            <AccountNumber>123456789</AccountNumber>
+            <BankCode Prefix="DE">50010070</BankCode>
+            <UsageOrderTypes>
+                <Service>
+                    <ServiceName>EOP</ServiceName>
+                    <Scope>CH</Scope>
+                    <Container containerType="ZIP"/>
+                    <MsgName version="08">camt.053</MsgName>
+                </Service>
+            </UsageOrderTypes>
+        </AccountInfo>
+        <OrderInfo>
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>MCT</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName version="09">pain.001</MsgName>
+            </Service>
+            <Description>Credit transfer</Description>
+            <NumSigRequired>2</NumSigRequired>
+        </OrderInfo>
+    </PartnerInfo>
+    <UserInfo>
+        <UserID Status="1">USER1</UserID>
+        <Name>First Signer</Name>
+        <Permission AuthorisationLevel="A">
+            <AdminOrderType>BTU</AdminOrderType>
+            <Service>
+                <ServiceName>MCT</ServiceName>
+                <Scope>CH</Scope>
+                <MsgName version="09">pain.001</MsgName>
+            </Service>
+            <AccountID>account-1</AccountID>
+            <MaxAmount Currency="CHF">50000.00</MaxAmount>
+        </Permission>
+    </UserInfo>
+    <UserInfo>
+        <UserID Status="6">USER2</UserID>
+        <Permission AuthorisationLevel="B">
+            <AdminOrderType>BTU</AdminOrderType>
+            <MaxAmount>1000</MaxAmount>
+        </Permission>
+        <Permission>
+            <AdminOrderType>HKD</AdminOrderType>
+        </Permission>
+    </UserInfo>
+</HKDResponseOrderData>

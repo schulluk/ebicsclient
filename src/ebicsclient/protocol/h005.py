@@ -13,6 +13,7 @@ the top of this module so they are trivial to correct once verified.
 
 import base64
 import datetime
+import decimal
 import os
 import zlib
 from typing import cast
@@ -36,15 +37,24 @@ from ebicsclient.errors import (
     UnknownReturnCodeError,
 )
 from ebicsclient.models import (
+    AccountInfo,
+    AccountNumber,
+    AuthorisationLevel,
     Bank,
+    BankCode,
     BankKeys,
+    BankParameters,
+    BankUrl,
     BusinessTransactionFormat,
+    CustomerAddress,
+    CustomerInfo,
     DateRange,
     DownloadInitialisation,
     DownloadSegment,
     Keyring,
     OrderTypeInfo,
     SubscriberInfo,
+    SubscriberPermissions,
     UploadPayload,
     User,
 )
@@ -92,6 +102,12 @@ _KNOWN_RETURN_CODES = {
     "091005": "EBICS_INVALID_ORDER_IDENTIFIER",  # observed live
     "091210": "EBICS_X509_WRONG_KEY_USAGE",  # observed live
 }
+
+# xs:boolean lexical forms (XML Schema Part 2, 3.2.2), for HPD's optional support flags.
+_XSD_TRUE = frozenset({"true", "1"})
+_XSD_FALSE = frozenset({"false", "0"})
+# ebics_types_H005.xsd: AccountType@Currency and AmountType@Currency default to EUR.
+_DEFAULT_CURRENCY = "EUR"
 _NONCE_BYTES = 16  # 128-bit nonce, rendered as uppercase hex
 # EBICS H005 mandates RSA keys of at least 2048 bits. Reject a bank key below that floor
 # rather than trust it: a weak modulus delivered over a compromised HPB (the response is
@@ -317,12 +333,224 @@ def parse_subscriber_info(order_data: bytes) -> SubscriberInfo:
     )
 
 
+def parse_bank_parameters(order_data: bytes) -> BankParameters:
+    """Parse an HPD response's order data into the bank's access and protocol parameters.
+
+    Args:
+        order_data: The decrypted ``HPDResponseOrderData`` XML bytes.
+
+    Returns:
+        The bank's access addresses, name, supported versions, and optional-feature flags.
+
+    Raises:
+        ProtocolError: the order data could not be parsed, is not an HPD response, or is
+            missing an element the H005 schema makes mandatory.
+    """
+    root = _parse(order_data)
+    if etree.QName(root).localname != "HPDResponseOrderData":
+        raise ProtocolError(
+            f"Expected <HPDResponseOrderData>, got <{etree.QName(root).localname}>"
+        )
+    access = _child(root, "AccessParams")
+    protocol = _child(root, "ProtocolParams")
+    version = _child(protocol, "Version")
+    urls = tuple(
+        _bank_url(url) for url in access.findall(f"{{{NAMESPACE}}}URL")
+    )
+    if not urls:
+        raise ProtocolError("HPD response lists no <URL>")
+    return BankParameters(
+        urls=urls,
+        institute=_child_text(access, "Institute"),
+        host_id=access.findtext(f"{{{NAMESPACE}}}HostID"),
+        protocol_versions=_version_list(version, "Protocol"),
+        authentication_versions=_version_list(version, "Authentication"),
+        encryption_versions=_version_list(version, "Encryption"),
+        signature_versions=_version_list(version, "Signature"),
+        supports_recovery=_support_flag(protocol, "Recovery"),
+        supports_pre_validation=_support_flag(protocol, "PreValidation"),
+        supports_client_data_download=_support_flag(protocol, "ClientDataDownload"),
+        supports_downloadable_order_data=_support_flag(protocol, "DownloadableOrderData"),
+    )
+
+
+def _bank_url(element: etree._Element) -> BankUrl:
+    if element.text is None or not element.text.strip():
+        raise ProtocolError("HPD response has an empty <URL>")
+    valid_from = element.get("valid_from")
+    return BankUrl(
+        url=element.text.strip(),
+        valid_from=_timestamp_value(valid_from, "URL@valid_from")
+        if valid_from is not None
+        else None,
+    )
+
+
+def _version_list(version: etree._Element, local_name: str) -> tuple[str, ...]:
+    # Each HPD version element is an xs:list of tokens ("A005 A006"), so split on whitespace.
+    return tuple(_child_text(version, local_name).split())
+
+
+def _support_flag(protocol: etree._Element, local_name: str) -> bool:
+    # Spec 9.2: an optional protocol parameter the bank omits means "not supported"; one it
+    # lists without the supported attribute means "supported" (OptSupportFlag, default true).
+    element = protocol.find(f"{{{NAMESPACE}}}{local_name}")
+    if element is None:
+        return False
+    supported = element.get("supported")
+    if supported is None:
+        return True
+    if supported.strip() in _XSD_TRUE:
+        return True
+    if supported.strip() in _XSD_FALSE:
+        return False
+    raise ProtocolError(
+        f"HPD response <{local_name}> has a non-boolean supported attribute: {supported!r}"
+    )
+
+
+def parse_customer_info(order_data: bytes) -> CustomerInfo:
+    """Parse an HKD response's order data into the customer's and all subscribers' data.
+
+    Args:
+        order_data: The decrypted ``HKDResponseOrderData`` XML bytes.
+
+    Returns:
+        The customer's address, accounts, registered order types, and every subscriber
+        with their permissions.
+
+    Raises:
+        ProtocolError: the order data could not be parsed, is not an HKD response, or is
+            missing an element the H005 schema makes mandatory.
+    """
+    root = _parse(order_data)
+    if etree.QName(root).localname != "HKDResponseOrderData":
+        raise ProtocolError(
+            f"Expected <HKDResponseOrderData>, got <{etree.QName(root).localname}>"
+        )
+    partner = _child(root, "PartnerInfo")
+    address = _child(partner, "AddressInfo")
+    subscribers = tuple(
+        _subscriber_permissions(user_info)
+        for user_info in root.findall(f"{{{NAMESPACE}}}UserInfo")
+    )
+    if not subscribers:
+        raise ProtocolError("HKD response lists no <UserInfo>")
+    return CustomerInfo(
+        address=CustomerAddress(
+            name=address.findtext(f"{{{NAMESPACE}}}Name"),
+            street=address.findtext(f"{{{NAMESPACE}}}Street"),
+            post_code=address.findtext(f"{{{NAMESPACE}}}PostCode"),
+            city=address.findtext(f"{{{NAMESPACE}}}City"),
+            region=address.findtext(f"{{{NAMESPACE}}}Region"),
+            country=address.findtext(f"{{{NAMESPACE}}}Country"),
+        ),
+        host_id=_child_text(_child(partner, "BankInfo"), "HostID"),
+        accounts=tuple(
+            _account_info(account)
+            for account in partner.findall(f"{{{NAMESPACE}}}AccountInfo")
+        ),
+        order_types=tuple(
+            _order_type_info(order_info)
+            for order_info in partner.findall(f"{{{NAMESPACE}}}OrderInfo")
+        ),
+        subscribers=subscribers,
+    )
+
+
+def _subscriber_permissions(user_info: etree._Element) -> SubscriberPermissions:
+    user_id = _child(user_info, "UserID")
+    if user_id.text is None or not user_id.text.strip():
+        raise ProtocolError("HKD response has an empty <UserID>")
+    status = user_id.get("Status")
+    if status is None:
+        raise ProtocolError("HKD response <UserID> is missing its Status attribute")
+    return SubscriberPermissions(
+        user_id=user_id.text.strip(),
+        user_status=status,
+        name=user_info.findtext(f"{{{NAMESPACE}}}Name"),
+        permissions=tuple(
+            _order_type_info(permission)
+            for permission in user_info.findall(f"{{{NAMESPACE}}}Permission")
+        ),
+    )
+
+
+def _account_info(account: etree._Element) -> AccountInfo:
+    identification = account.get("ID")
+    if identification is None:
+        raise ProtocolError("An <AccountInfo> entry is missing its ID attribute")
+    account_numbers = tuple(
+        AccountNumber(
+            value=_required_element_text(element),
+            international=_xsd_boolean(element.get("international"), "international")
+            if etree.QName(element).localname == "AccountNumber"
+            else False,
+            national_format=element.get("format")
+            if etree.QName(element).localname == "NationalAccountNumber"
+            else None,
+        )
+        for element in account
+        if etree.QName(element).localname in ("AccountNumber", "NationalAccountNumber")
+        and etree.QName(element).namespace == NAMESPACE
+    )
+    if not account_numbers:
+        raise ProtocolError(f"<AccountInfo> {identification!r} carries no account number")
+    bank_codes = tuple(
+        BankCode(
+            value=_required_element_text(element),
+            international=_xsd_boolean(element.get("international"), "international")
+            if etree.QName(element).localname == "BankCode"
+            else False,
+            prefix=element.get("Prefix"),
+            national_format=element.get("format")
+            if etree.QName(element).localname == "NationalBankCode"
+            else None,
+        )
+        for element in account
+        if etree.QName(element).localname in ("BankCode", "NationalBankCode")
+        and etree.QName(element).namespace == NAMESPACE
+    )
+    usage = account.find(f"{{{NAMESPACE}}}UsageOrderTypes")
+    return AccountInfo(
+        identification=identification,
+        currency=account.get("Currency", _DEFAULT_CURRENCY),
+        description=account.get("Description"),
+        account_numbers=account_numbers,
+        bank_codes=bank_codes,
+        holder=account.findtext(f"{{{NAMESPACE}}}AccountHolder"),
+        # Spec 9.3.2.1.3: no UsageOrderTypes = unrestricted; an empty one = enabled for none.
+        permitted_services=tuple(
+            _business_transaction_format(service)
+            for service in usage.findall(f"{{{NAMESPACE}}}Service")
+        )
+        if usage is not None
+        else None,
+    )
+
+
+def _required_element_text(element: etree._Element) -> str:
+    if element.text is None or not element.text.strip():
+        raise ProtocolError(f"EBICS order data has an empty <{etree.QName(element).localname}>")
+    return element.text.strip()
+
+
+def _xsd_boolean(value: str | None, attribute: str) -> bool:
+    # Both international flags default to false (AccountType, ebics_types_H005.xsd).
+    if value is None or value.strip() in _XSD_FALSE:
+        return False
+    if value.strip() in _XSD_TRUE:
+        return True
+    raise ProtocolError(f"EBICS order data has a non-boolean {attribute} attribute: {value!r}")
+
+
 def _order_type_info(element: etree._Element) -> OrderTypeInfo:
     admin_order_type = element.findtext(f"{{{NAMESPACE}}}AdminOrderType")
     if admin_order_type is None:
-        raise ProtocolError("HTD entry is missing <AdminOrderType>")
+        raise ProtocolError("HTD/HKD entry is missing <AdminOrderType>")
     service = element.find(f"{{{NAMESPACE}}}Service")
     signatures = element.findtext(f"{{{NAMESPACE}}}NumSigRequired")
+    maximum_amount = element.find(f"{{{NAMESPACE}}}MaxAmount")
     return OrderTypeInfo(
         admin_order_type=admin_order_type,
         service=_business_transaction_format(service) if service is not None else None,
@@ -330,7 +558,46 @@ def _order_type_info(element: etree._Element) -> OrderTypeInfo:
         number_of_signatures_required=_int(signatures, "NumSigRequired")
         if signatures is not None
         else None,
+        authorisation_level=_authorisation_level(element.get("AuthorisationLevel")),
+        account_id=element.findtext(f"{{{NAMESPACE}}}AccountID"),
+        maximum_amount=_decimal(maximum_amount.text, "MaxAmount")
+        if maximum_amount is not None
+        else None,
+        maximum_amount_currency=maximum_amount.get("Currency", _DEFAULT_CURRENCY)
+        if maximum_amount is not None
+        else None,
     )
+
+
+def _authorisation_level(value: str | None) -> AuthorisationLevel | None:
+    if value is None:
+        return None
+    try:
+        return AuthorisationLevel(value.strip())
+    except ValueError as error:
+        # AuthorisationLevelType is a closed E/A/B/T enumeration; anything else is malformed.
+        raise ProtocolError(f"Unknown AuthorisationLevel {value!r}") from error
+
+
+def _decimal(text: str | None, local_name: str) -> decimal.Decimal:
+    message = f"EBICS order data <{local_name}> is not a decimal: {text!r}"
+    try:
+        value = decimal.Decimal((text or "").strip())
+    except decimal.InvalidOperation as error:
+        raise ProtocolError(message) from error
+    # Decimal accepts NaN and Infinity, which xs:decimal (AmountValueType) does not.
+    if not value.is_finite():
+        raise ProtocolError(message)
+    return value
+
+
+def _timestamp_value(text: str, local_name: str) -> datetime.datetime:
+    try:
+        return datetime.datetime.fromisoformat(text.strip())
+    except ValueError as error:
+        raise ProtocolError(
+            f"EBICS order data {local_name} is not a timestamp: {text!r}"
+        ) from error
 
 
 def _business_transaction_format(service: etree._Element) -> BusinessTransactionFormat:

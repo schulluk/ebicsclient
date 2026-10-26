@@ -575,9 +575,32 @@ class PaymentStatusReport:
         )
 
 
+class AuthorisationLevel(StrEnum):
+    """The signature class a subscriber holds for an order type (``AuthorisationLevelType``).
+
+    The H005 schema restricts the value to these four codes (``ebics_types_H005.xsd``); the
+    bank states it on upload permissions and omits it for downloads (spec 9.3.2.1.3).
+
+    - ``INDIVIDUAL``: an individual signature (``E``) — authorises the order on its own.
+    - ``FIRST``: a first signature (``A``).
+    - ``SECOND``: a second signature (``B``) — needs an ``A`` signature alongside.
+    - ``TRANSPORT``: a transport signature (``T``) — submits the order but does not authorise it.
+    """
+
+    INDIVIDUAL = "E"
+    FIRST = "A"
+    SECOND = "B"
+    TRANSPORT = "T"
+
+
 @dataclass(frozen=True, slots=True)
 class OrderTypeInfo:
-    """One order type entry from the bank's subscriber data (HTD ``OrderInfo``/``Permission``).
+    """One order type entry from the bank's subscriber data (HTD/HKD ``OrderInfo``/``Permission``).
+
+    The same shape serves both lists: a partner's registered order types (``OrderInfo``,
+    which carry a description and a signature count) and a user's permissions
+    (``Permission``, which may carry a signature class, an account, and an amount limit).
+    Fields the entry does not carry are ``None``.
 
     Attributes:
         admin_order_type: The administrative order type (``"BTD"``, ``"BTU"``, ``"HPB"``, …).
@@ -587,12 +610,24 @@ class OrderTypeInfo:
             carry none).
         number_of_signatures_required: How many electronic signatures the order type
             requires (upload entries), or ``None`` if not stated.
+        authorisation_level: The user's signature class for this permission, or ``None``
+            (download permissions and partner order types carry none).
+        account_id: The ``AccountInfo`` ID the permission is limited to, or ``None`` when it
+            applies to all of the customer's accounts.
+        maximum_amount: The amount up to which the permission is valid, as an exact decimal,
+            or ``None`` for no stated limit.
+        maximum_amount_currency: The ISO 4217 currency of ``maximum_amount`` (the schema
+            default ``"EUR"`` when the bank omits it), or ``None`` when there is no limit.
     """
 
     admin_order_type: str
     service: BusinessTransactionFormat | None
     description: str | None
     number_of_signatures_required: int | None
+    authorisation_level: AuthorisationLevel | None = None
+    account_id: str | None = None
+    maximum_amount: Decimal | None = None
+    maximum_amount_currency: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -617,6 +652,185 @@ class SubscriberInfo:
     name: str | None
     permissions: tuple[OrderTypeInfo, ...]
     order_types: tuple[OrderTypeInfo, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerAddress:
+    """The customer's address as registered at the bank (HKD/HTD ``AddressInfo``).
+
+    Every part is optional in the schema (``AddressInfoType``), so each is ``None`` when the
+    bank does not state it.
+
+    Attributes:
+        name: The customer's name.
+        street: Street and house number.
+        post_code: The postal code.
+        city: The city.
+        region: The region, province, or federal state.
+        country: The country, as the bank writes it (free text, not necessarily an ISO code).
+    """
+
+    name: str | None
+    street: str | None
+    post_code: str | None
+    city: str | None
+    region: str | None
+    country: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AccountNumber:
+    """One account number of a registered account (``AccountNumber``/``NationalAccountNumber``).
+
+    Attributes:
+        value: The account number as the bank sent it.
+        international: ``True`` for an IBAN (``AccountNumber`` with ``international="true"``);
+            ``False`` for a national number.
+        national_format: For a free-format ``NationalAccountNumber``, the bank's format code
+            (its ``format`` attribute); ``None`` for an ``AccountNumber``.
+    """
+
+    value: str
+    international: bool
+    national_format: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class BankCode:
+    """One bank code of a registered account (``BankCode``/``NationalBankCode``).
+
+    Attributes:
+        value: The bank code as the bank sent it.
+        international: ``True`` for a SWIFT BIC (``BankCode`` with ``international="true"``);
+            ``False`` for a national bank code.
+        prefix: The national bank-code prefix (e.g. ``"DE"``), or ``None``.
+        national_format: For a free-format ``NationalBankCode``, the bank's format code;
+            ``None`` for a ``BankCode``.
+    """
+
+    value: str
+    international: bool
+    prefix: str | None
+    national_format: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AccountInfo:
+    """One of the customer's accounts as registered at the bank (HKD/HTD ``AccountInfo``).
+
+    A bank lists an account when the customer receives statements for it or one of its
+    subscribers may sign for it (spec 9.3); the holder need not be the customer itself.
+
+    Attributes:
+        identification: The account's ID within this response — what a permission's
+            ``account_id`` refers to.
+        currency: The account's ISO 4217 currency (the schema default ``"EUR"`` when the bank
+            omits it).
+        description: The bank's description of the account, or ``None``.
+        account_numbers: The account's numbers, in document order (one or two).
+        bank_codes: The account's bank codes, in document order (possibly none).
+        holder: The account holder's name, or ``None``.
+        permitted_services: The business transactions the account is enabled for. ``None``
+            means the bank states no restriction; an empty tuple means the account is enabled
+            for none (spec 9.3.2.1.3, ``UsageOrderTypes``).
+    """
+
+    identification: str
+    currency: str
+    description: str | None
+    account_numbers: tuple[AccountNumber, ...]
+    bank_codes: tuple[BankCode, ...]
+    holder: str | None
+    permitted_services: tuple[BusinessTransactionFormat, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberPermissions:
+    """One subscriber of the customer and what it may do (an HKD ``UserInfo``).
+
+    Attributes:
+        user_id: The subscriber's User ID.
+        user_status: The bank's user-status code (spec 9.3.2.1.3; e.g. ``"1"`` = ready).
+        name: The subscriber's registered name, or ``None``.
+        permissions: The subscriber's permissions, in document order.
+    """
+
+    user_id: str
+    user_status: str
+    name: str | None
+    permissions: tuple[OrderTypeInfo, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerInfo:
+    """The bank's registered data for the customer and all of its subscribers (the HKD download).
+
+    Where :class:`SubscriberInfo` (HTD) shows only the requesting subscriber, this is the
+    customer-wide view: the address, the accounts, the order types registered for the
+    customer, and every subscriber with their permissions.
+
+    Attributes:
+        address: The customer's registered address.
+        host_id: The EBICS Host ID the customer is registered under.
+        accounts: The customer's accounts, in document order (possibly none).
+        order_types: Every order type registered for the customer, in document order.
+        subscribers: Every subscriber of the customer, in document order (at least one).
+    """
+
+    address: CustomerAddress
+    host_id: str
+    accounts: tuple[AccountInfo, ...]
+    order_types: tuple[OrderTypeInfo, ...]
+    subscribers: tuple[SubscriberPermissions, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BankUrl:
+    """One EBICS access address the bank publishes (an HPD ``URL``).
+
+    Attributes:
+        url: The URL or IP address.
+        valid_from: When the address becomes valid, or ``None`` for "valid now". Timezone-aware
+            when the bank states a zone, as banks normally do.
+    """
+
+    url: str
+    valid_from: datetime.datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class BankParameters:
+    """The bank's EBICS access and protocol parameters (the HPD download).
+
+    The support flags follow the spec's rule for optional protocol parameters (spec 9.2): a
+    parameter the bank omits means *not supported*; one it lists without a ``supported``
+    attribute means *supported*.
+
+    Attributes:
+        urls: The bank's EBICS access addresses, in document order (at least one).
+        institute: The bank's name.
+        host_id: The bank's EBICS Host ID, or ``None`` if the bank does not state it.
+        protocol_versions: The supported EBICS protocol versions (e.g. ``("H005",)``).
+        authentication_versions: The supported authentication versions (e.g. ``("X002",)``).
+        encryption_versions: The supported encryption versions (e.g. ``("E002",)``).
+        signature_versions: The supported electronic-signature versions (e.g. ``("A006",)``).
+        supports_recovery: Whether the bank supports transaction recovery.
+        supports_pre_validation: Whether the bank accepts pre-validation data.
+        supports_client_data_download: Whether the bank supports HKD and HTD.
+        supports_downloadable_order_data: Whether the bank supports HAA.
+    """
+
+    urls: tuple[BankUrl, ...]
+    institute: str
+    host_id: str | None
+    protocol_versions: tuple[str, ...]
+    authentication_versions: tuple[str, ...]
+    encryption_versions: tuple[str, ...]
+    signature_versions: tuple[str, ...]
+    supports_recovery: bool
+    supports_pre_validation: bool
+    supports_client_data_download: bool
+    supports_downloadable_order_data: bool
 
 
 class ReceiptPolicy(StrEnum):

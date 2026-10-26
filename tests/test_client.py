@@ -534,3 +534,39 @@ def test_make_ini_letter_renders_html(keyring: Keyring) -> None:
     letter = client.make_ini_letter(output_format=OutputFormat.HTML)
     assert letter.output_format is OutputFormat.HTML
     assert b"EBICS Initialisation Letter" in letter.content
+
+
+def test_customer_info_runs_the_hkd_admin_download(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    order_data = (Path(__file__).parent / "data" / "hkd_zkb_sample.xml").read_bytes()
+    responses = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    info = client.customer_info()
+    assert [subscriber.user_id for subscriber in info.subscribers] == ["USER1"]
+    opened = etree.fromstring(transport.posts[0])
+    assert opened.findtext(f".//{{{_NS}}}AdminOrderType") == "HKD"
+    assert opened.find(f".//{{{_NS}}}StandardOrderParams") is not None
+    assert _receipt_code(transport.posts[-1]) == "0"
+
+
+def test_bank_parameters_runs_the_hpd_admin_download(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    order_data = (Path(__file__).parent / "data" / "hpd_zkb_sample.xml").read_bytes()
+    responses = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    assert "H005" in client.bank_parameters().protocol_versions
+    opened = etree.fromstring(transport.posts[0])
+    assert opened.findtext(f".//{{{_NS}}}AdminOrderType") == "HPD"
+
+
+@pytest.mark.parametrize("method", ["customer_info", "bank_parameters"])
+def test_admin_downloads_require_hpb_first(method: str, keyring: Keyring) -> None:
+    client, _ = _client(_OK_RESPONSE, keyring)
+    with pytest.raises(ClientStateError):
+        getattr(client, method)()

@@ -30,7 +30,9 @@ from ebicsclient.models import (
     Bank,
     BankKeyHashes,
     BankKeys,
+    BankParameters,
     BusinessTransactionFormat,
+    CustomerInfo,
     DateRange,
     Entry,
     InitializationState,
@@ -489,6 +491,59 @@ class Client:
             self._bank, self._user, self._keyring, bank_keys, "HTD"
         )
         return h005.parse_subscriber_info(self._run_download_transaction(request, bank_keys))
+
+    def customer_info(self) -> CustomerInfo:
+        """Download the bank's registered data for the customer and all its subscribers (HKD).
+
+        Runs the administrative ``HKD`` download. Where :meth:`subscriber_info` (HTD) shows
+        only this subscriber, HKD is the customer-wide view: the address, the accounts, the
+        order types registered for the customer, and every subscriber with their
+        permissions and signature classes. The bank's keys must already be available (call
+        :meth:`hpb` first).
+
+        Returns:
+            The customer's registered data.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ResponseAuthenticationError: a response failed signature verification.
+            ReturnCodeError: the bank rejected the request.
+            CryptoError: the order data could not be decrypted.
+        """
+        bank_keys = self._require_bank_keys("HKD")
+        logger.info("HKD: requesting the customer and subscriber data registered at the bank")
+        request = h005.build_admin_download_initialisation_request(
+            self._bank, self._user, self._keyring, bank_keys, "HKD"
+        )
+        return h005.parse_customer_info(self._run_download_transaction(request, bank_keys))
+
+    def bank_parameters(self) -> BankParameters:
+        """Download the bank's EBICS access and protocol parameters (HPD).
+
+        Runs the administrative ``HPD`` download and returns the bank's published
+        addresses, the EBICS protocol and key versions it accepts, and which optional
+        features (recovery, pre-validation, HKD/HTD, HAA) it supports. The bank's keys must
+        already be available (call :meth:`hpb` first).
+
+        Returns:
+            The bank's parameters.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ResponseAuthenticationError: a response failed signature verification.
+            ReturnCodeError: the bank rejected the request.
+            CryptoError: the order data could not be decrypted.
+        """
+        bank_keys = self._require_bank_keys("HPD")
+        logger.info("HPD: requesting the bank parameters")
+        request = h005.build_admin_download_initialisation_request(
+            self._bank, self._user, self._keyring, bank_keys, "HPD"
+        )
+        return h005.parse_bank_parameters(self._run_download_transaction(request, bank_keys))
 
     def download_statements(
         self,
