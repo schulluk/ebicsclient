@@ -23,12 +23,13 @@ and 1.3.1 were never published.
   `download_booking_advices()`, `download_payment_status_reports()`) parsed the order data
   only after the positive receipt, unless a date range was given. A file the parser
   rejected was then already consumed at the bank and could not be downloaded again. They
-  now parse before the receipt, and a `MessageFormatError` sends a negative receipt.
+  now parse before the receipt, and a `MessageFormatError` sends a negative receipt. Such
+  a file now stays at the bank and fails every typed download again; `download()` with
+  the same BTF still returns its raw bytes under the default `VersionPolicy`.
 - A damaged or unusual ZIP container (an encrypted entry, an unsupported compression
-  method, corrupt compressed data) raised the standard library's own exceptions —
-  `RuntimeError`, `NotImplementedError`, `ValueError`, `zlib.error` and others — instead of
-  `MessageFormatError`. Every such failure now raises `MessageFormatError`, so catching
-  `EbicsError` covers it.
+  method, corrupt compressed data) raised standard-library exceptions such as
+  `RuntimeError` or `zlib.error` instead of `MessageFormatError`. Every such failure now
+  raises `MessageFormatError`, so catching `EbicsError` covers it.
 
 ## [1.8.0] - 2026-10-26
 
@@ -52,10 +53,11 @@ and 1.3.1 were never published.
 ### Changed
 
 - `save_keyring` writes atomically (temporary file, fsync, rename) and with owner-only
-  permissions.
+  permissions (mode 0600), so another user or group can no longer read the saved file.
 
-All of it was validated live against the ZKB test platform. 1.8.0 includes the fix
-released in 1.7.2.
+All of it was validated live against the ZKB test platform, except the account data and
+a permission's account and amount limit: the test subscriber has none, so those are
+checked against the XSD only. 1.8.0 includes the fix released in 1.7.2.
 
 ## [1.7.2] - 2026-10-26
 
@@ -74,7 +76,7 @@ released in 1.7.2.
 > affected.
 >
 > **What happened:** the bank answers an upload with `000000` before it verifies the
-> electronic signature (spec 5.1.3.1), so `upload()` reported success. The bank then
+> electronic signature, so `upload()` reported success. The bank then
 > rejected the order at the signature check, and it was not executed. The bank may not
 > have sent a payment status report (pain.002) for such an order.
 >
@@ -113,7 +115,7 @@ released in 1.7.2.
 - Five runnable examples in `examples/`: a non-consuming peek, a consume-safe nightly
   sync, a dated backfill, a payment upload with its pain.002 round trip, and onboarding
   with the certificate profile.
-- Python 3.14 in the CI matrix.
+- Python 3.14 is now tested in CI, like 3.11 to 3.13.
 
 ### Fixed
 
