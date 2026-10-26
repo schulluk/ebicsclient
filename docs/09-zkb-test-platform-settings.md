@@ -106,9 +106,21 @@ The test platform separates two facilities, which matters when interpreting resu
   a `Protokoll.txt` validation log, two `pain.002.001.10` status reports (technical `ACTC`, then
   business `ACCP`/`RJCT`), and — once accepted — a `camt.053` statement.
 - **The EBICS channel** is validated independently. Our `BTU` upload is **accepted** by the EBICS
-  server (correct AuthSignature, A006 signature, and encryption), but on this platform it does
+  server (correct AuthSignature and encryption), but on this platform it does
   **not** feed the web simulation, and the web simulation's `camt.053`/`pain.002` are **not**
   exposed back over the EBICS download queue (EOP stays `090005`).
+
+> **Correction (2026-10-26).** The "dead bridge" below was our bug, not the platform's. The A006
+> signature had the wrong shape (EMSA-PSS over the order data instead of over its SHA-256 hash
+> value, spec 14.1.4.2.5). The EBICS exchange still returned `000000`, because a BTU order's
+> signature is verified *after* the exchange (spec 5.1.3.1), and the platform then dropped the
+> order quietly.
+> A PUB key change, which the bank verifies synchronously, exposed it (`091301`). With the
+> corrected signature, an EBICS upload of a 6-transaction pain.001 was processed: HAA then
+> listed `EOP/camt.053`, `STM/camt.052`, `REP/camt.054` (twice), `PSR/pain.002` and `OTH/BIL`,
+> and the pain.002 reports read `ACTC`, then `PART` with 2 rejected transactions — the
+> "every third transaction" simulation setting. See [docs/12](12-verification-ledger.md),
+> incident 3.
 
 Practical consequences for testing:
 
@@ -129,8 +141,9 @@ the bank's own registry as the oracle:
   `PSR/CH/pain.002/10` is registered **without a Container**: requesting it with `Container=ZIP`
   is what produced `091005` (the human-readable catalogue's "ZIP" column describes the delivered
   file, not the BTF registration). `PAIN_002` was fixed accordingly and now gets `090005`.
-- **`HAA`** (order types with data available) returns an **empty list** — the bank itself
-  confirms nothing is ever queued on the EBICS side, regardless of upload route. EBICS `BTU`
+- **`HAA`** (order types with data available) returned an **empty list** at the time — the bank
+  itself confirmed nothing was queued on the EBICS side, regardless of upload route (explained
+  by the A006 correction above; since then EBICS uploads do produce data). EBICS `BTU`
   uploads are accepted (all variants probed: with/without `SignatureFlag`, with/without
   `fileName`, valid content, same-day execution date, well past the manual's 10–30 s processing
   window) but never appear in the web table nor produce EBICS-retrievable results, and web-upload
@@ -140,12 +153,12 @@ the bank's own registry as the oracle:
   **`011000 EBICS_DOWNLOAD_POSTPROCESS_DONE`** — a success code the client now accepts.
 
 The manual (`ZKB_Testplattform_BenHB.pdf`, §3.7.4–3.7.5) documents EBICS submission/retrieval as
-supported, so the dead EBICS→simulation bridge contradicts the platform's own documentation.
+supported, so the dead EBICS→simulation bridge contradicted the platform's own documentation —
+rightly, as the 2026-10-26 correction above shows.
 
 ## Open items surfaced by these settings
 
-1. **Ask ZKB support** (`support.epayment@zkb.ch`) why EBICS-submitted pain.001 files are
-   accepted but never processed by the simulation, and why simulation results never appear in
-   the EBICS download queues (`HAA` stays empty) — the Benutzerhandbuch documents both flows.
+1. ~~Ask ZKB support why EBICS-submitted pain.001 files are never processed~~ — resolved
+   2026-10-26: the cause was the client's A006 signature, not the platform (see above).
 2. **camt.054 booking advices** (QRR/SCOR/LSV are enabled here) are a plausible near-term read
    feature after the MVP, but remain out of the current scope.

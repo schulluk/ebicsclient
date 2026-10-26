@@ -6,6 +6,7 @@ the exact H005 schema must still be validated against a bank test platform.
 
 import base64
 import datetime
+import hashlib
 import zlib
 from pathlib import Path
 
@@ -383,9 +384,10 @@ def test_prepare_upload_round_trips_through_the_bank_side_crypto(
     assert signature_root.findtext(f".//{{{_S002}}}UserID") == user.user_id
     signature_value = signature_root.findtext(f".//{{{_S002}}}SignatureValue")
     assert signature_value is not None
+    # A006 is EMSA-PSS over the SHA-256 hash value of the order data (spec 14.1.4.2.5).
     keyring.signature.public_key().verify(
         base64.b64decode(signature_value),
-        order_data,
+        hashlib.sha256(order_data).digest(),
         padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
         hashes.SHA256(),
     )

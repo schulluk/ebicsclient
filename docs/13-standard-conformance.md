@@ -75,7 +75,7 @@ absent, not excluded — unless the **Notes** say otherwise.
 | Capability | Rule | Support | Verification | Notes |
 |---|---|---|---|---|
 | BTU upload transaction (initialise → transfer) | Mandated | ✅ | live | |
-| A006 electronic signature (RSASSA-PSS) | Mandated | ✅ | live | |
+| A006 electronic signature (RSASSA-PSS) | Mandated | ✅ | live | Verified by the bank since 2026-10-26 (PUB/HCS/HCA, checked synchronously). Before that the signature had the wrong shape, and BTU acceptance had not exposed it — see the [ledger](12-verification-ledger.md), incident 3 |
 | Order-data encryption to the bank's E002 | Mandated | ✅ | live | |
 | `SignatureFlag` on BTU order params | Mandated | ✅ | live | |
 | Arbitrary business upload via a custom BTF | Mandated | ✅ | live | Any `BusinessTransactionFormat` |

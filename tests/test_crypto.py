@@ -5,7 +5,10 @@ detection). They do *not* prove agreement with a real bank — the exact digest
 construction must still be validated against a bank test platform.
 """
 
+import hashlib
+
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from lxml import etree
 
 from crypto_helpers import encrypt_order_data
@@ -51,24 +54,62 @@ def test_order_data_encryption_round_trips_through_decrypt(keyring: Keyring) -> 
     assert recovered == order_data
 
 
-def test_a006_order_signature_verifies_with_pss(keyring: Keyring) -> None:
+def _verify_emsa_pss_per_spec(
+    public_key: rsa.RSAPublicKey, signature: bytes, message: bytes
+) -> bool:
+    """verifyEMSA-PSS(PK)[s, M], transcribed step by step from spec 14.1.4.2.3.
+
+    Written against the spec text with integer RSA and hashlib only — independent of the
+    ``cryptography`` PSS code the library signs with, so it can falsify a wrong A006 shape.
+    """
+    numbers = public_key.public_numbers()
+    hash_length = salt_length = 32
+    em_bits = numbers.n.bit_length() - 1
+    em_length = (em_bits + 7) // 8
+    value = int.from_bytes(signature, "big")
+    if value >= numbers.n:
+        return False
+    recovered = pow(value, numbers.e, numbers.n).to_bytes(em_length, "big")
+    if recovered[-1] != 0xBC:
+        return False
+    masked_db = recovered[: em_length - hash_length - 1]
+    hashed = recovered[em_length - hash_length - 1 : -1]
+    mask = b"".join(
+        hashlib.sha256(hashed + counter.to_bytes(4, "big")).digest()
+        for counter in range(-(-len(masked_db) // hash_length))
+    )[: len(masked_db)]
+    db = bytearray(byte ^ mask_byte for byte, mask_byte in zip(masked_db, mask, strict=True))
+    db[0] &= 0xFF >> (8 * em_length - em_bits)
+    padding_length = em_length - hash_length - salt_length - 2
+    if any(db[:padding_length]) or db[padding_length] != 0x01:
+        return False
+    salt = bytes(db[-salt_length:])
+    message_hash = hashlib.sha256(message).digest()
+    return hashlib.sha256(b"\x00" * 8 + message_hash + salt).digest() == hashed
+
+
+def test_a006_signs_the_hash_value_of_the_order_data(keyring: Keyring) -> None:
+    # Spec 14.1.4.2.5: HM = SHA-256(M), s = signEMSA-PSS(SK)[HM] — EMSA-PSS over the hash.
     order_data = b"<Document>a payment instruction</Document>"
     signature = crypto.sign_order_data(keyring.signature, order_data)
-    # Verify it as RSASSA-PSS/SHA-256 the way the bank would (A006).
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.asymmetric import padding
+    public_key = keyring.signature.public_key()
+    assert _verify_emsa_pss_per_spec(public_key, signature, hashlib.sha256(order_data).digest())
+    # The single-hash shape (EMSA-PSS over M itself) is what the bank rejected live (091301).
+    assert not _verify_emsa_pss_per_spec(public_key, signature, order_data)
 
-    keyring.signature.public_key().verify(
-        signature,
-        order_data,
-        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
-        hashes.SHA256(),
+
+def test_a006_hash_leaves_out_cr_lf_and_ctrl_z(keyring: Keyring) -> None:
+    # Spec 14: CR, LF and Ctrl-Z are not included in the hash values of the A005/A006 ES.
+    order_data = b"<?xml version='1.0'?>\r\n<Document>\n  pay\x1a</Document>\n"
+    stripped = b"<?xml version='1.0'?><Document>  pay</Document>"
+    signature = crypto.sign_order_data(keyring.signature, order_data)
+    assert _verify_emsa_pss_per_spec(
+        keyring.signature.public_key(), signature, hashlib.sha256(stripped).digest()
     )
+    assert crypto.order_data_digest(order_data) == hashlib.sha256(stripped).digest()
 
 
 def test_order_data_digest_is_sha256(keyring: Keyring) -> None:
-    import hashlib
-
     order_data = b"<Document/>"
     assert crypto.order_data_digest(order_data) == hashlib.sha256(order_data).digest()
 

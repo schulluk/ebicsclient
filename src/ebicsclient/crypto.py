@@ -55,6 +55,10 @@ _SHA256 = "http://www.w3.org/2001/04/xmlenc#sha256"
 _AUTHENTICATE_NODES = etree.XPath("//*[@authenticate='true']")
 _REFERENCE_URI = "#xpointer(//*[@authenticate='true'])"
 
+# Spec 14 (requirements of the ES): "The characters restricted to the operating system (CR,
+# LF and Ctrl-Z) are not included in the calculation of hash values of the A005/A006 ES."
+_EXCLUDED_FROM_SIGNATURE_HASH = b"\r\n\x1a"
+
 # EBICS encrypts order data with AES in CBC mode under a null initialisation vector; the
 # AES (transaction) key is itself RSA-encrypted to the recipient's E002 key. The null IV
 # and the padding scheme are part of the protocol's failure-prone area #2 and must be
@@ -257,15 +261,31 @@ def encrypt_transaction_key(encryption_key: rsa.RSAPublicKey, transaction_key: b
 
 
 def order_data_digest(order_data: bytes) -> bytes:
-    """Return the SHA-256 digest of the order data (the DataDigest an upload carries)."""
-    return hashlib.sha256(order_data).digest()
+    """Return the hash value the A006 signature covers — also the DataDigest an upload carries.
+
+    It is the SHA-256 of the order data with CR, LF and Ctrl-Z removed: those characters are
+    not part of the ES hash (spec 14), and the DataDigest is "the hash value of the order
+    data that has been signed" (spec 5.3), computed by the signature process its
+    ``SignatureVersion`` names (spec 5.5.1.1.1). The order data itself is sent unchanged.
+
+    Args:
+        order_data: The order data being uploaded (its raw bytes, before compression).
+
+    Returns:
+        The 32-byte SHA-256 digest.
+    """
+    return hashlib.sha256(order_data.translate(None, _EXCLUDED_FROM_SIGNATURE_HASH)).digest()
 
 
 def sign_order_data(signature_key: rsa.RSAPrivateKey, order_data: bytes) -> bytes:
     """Compute the A006 electronic signature (EU) over the order data.
 
-    EBICS signature version A006 is RSASSA-PSS with SHA-256, MGF1-SHA-256, and a salt length
-    equal to the digest length (32 bytes). The signature authorises the order inside EBICS.
+    A006 is defined over the *hash value* of the message, not the message itself
+    (spec 14.1.4.2.5): ``HM = SHA-256(M)``, then ``s = signEMSA-PSS(SK)[HM]``, with
+    EMSA-PSS using SHA-256, MGF1-SHA-256, and a 32-byte salt (spec 14.1.4.2). EMSA-PSS
+    hashes its input once more, so the order data is hashed twice in total — the spec's
+    accommodation of signature cards (14.1.1). ``M`` is the order data without CR, LF and
+    Ctrl-Z (spec 14), i.e. ``HM`` is :func:`order_data_digest`.
 
     Args:
         signature_key: The subscriber's A006 signature private key.
@@ -275,7 +295,7 @@ def sign_order_data(signature_key: rsa.RSAPrivateKey, order_data: bytes) -> byte
         The RSASSA-PSS signature value (to be base64-encoded into the OrderSignatureData).
     """
     return signature_key.sign(
-        order_data,
+        order_data_digest(order_data),
         padding.PSS(
             mgf=padding.MGF1(hashes.SHA256()),
             salt_length=hashes.SHA256().digest_size,

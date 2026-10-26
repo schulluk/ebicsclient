@@ -2,7 +2,7 @@
 
 ## Why this exists
 
-Twice now, a wrong-but-self-consistent implementation passed every test we had:
+Three times now, a wrong-but-self-consistent implementation passed every test we had:
 
 1. **Exclusive c14n instead of inclusive C14N 1.0** ([docs/08](08-parity-and-xsd-findings.md)) — round-trip tests proved
    consistency, not interoperability.
@@ -12,9 +12,20 @@ Twice now, a wrong-but-self-consistent implementation passed every test we had:
    had no oracle; the flaw surfaced only when a real production activation failed. It cost a
    bank round-trip, a subscriber reset, and re-initialisation.
 
-Both incidents share one root: **a protocol claim implemented from prior knowledge instead
-of a cited source, in a spot without an external oracle.** This ledger makes that state
-visible: every protocol-surface claim gets a row with its normative citation, its oracle,
+3. **The A006 electronic signature signed the order data instead of its hash value.** Spec
+   14.1.4.2.5 defines A006 as EMSA-PSS over `SHA-256(M)` (so the data is hashed twice), and
+   spec 14 leaves CR, LF and Ctrl-Z out of that hash; the client ran EMSA-PSS over the raw
+   bytes. The ledger listed A006 as "live" because ZKB *accepted* pain.001 uploads — but a
+   bank-technical order is processed, signature included, only after the EBICS exchange has
+   returned `000000` (spec 5.1.3.1), so acceptance never exercised it (docs/09 records that
+   those uploads silently never reached the platform's processing). The first order the bank
+   verifies within the exchange, PUB (spec 4.3, 5.1.3.1), was rejected with
+   `091301 EBICS_SIGNATURE_VERIFICATION_FAILED`; the spec-conformant signature was then
+   accepted, and a pain.001 upload signed the same way was processed (2026-10-26).
+
+All three incidents share one root: **a protocol claim implemented from prior knowledge instead
+of a cited source, in a spot without an external oracle** — and in the third, an oracle that
+looked like one but never ran. This ledger makes that state visible: every protocol-surface claim gets a row with its normative citation, its oracle,
 and its status. A row without an oracle is a liability, not a detail — it must be labelled
 UNVERIFIED here and in the README until an oracle exists.
 
@@ -50,7 +61,8 @@ UNVERIFIED here and in the README until an oracle exists.
 |---|---|---|---|
 | Namespace `urn:org:ebics:H005`; schema file names | Spec, schema-files amendment note; XSDs | XSD + live | live |
 | AuthSignature over `authenticate="true"` nodes, inclusive C14N 1.0, RSA-SHA256/X002 | Spec 5.5.1.2.1; H005 XSD | XSD, parity, live | live |
-| A006 ES = RSASSA-PSS, SHA-256, MGF1-SHA256, salt = 32 | Spec 14.1.4.2 | parity + live (uploads accepted) | live |
+| A006 ES = EMSA-PSS over the **hash value** `SHA-256(M)` (SHA-256, MGF1-SHA256, salt = 32); `M` = order data without CR, LF, Ctrl-Z | Spec 14.1.4.2.5 (sign the hash), 14.1.4.2 (PSS parameters), 14 (CR/LF/Ctrl-Z excluded) | live: PUB, HCS, HCA accepted by ZKB, which verifies their ES within the exchange (spec 4.3, 5.1.3.1); the earlier single-hash form was rejected `091301`. A pain.001 signed this way was then processed (pain.002 `ACTC`, `PART`). Plus a verifier transcribed from spec 14.1.4.2.3 (`test_crypto.py`). BTU *acceptance* alone is **not** an oracle — its ES is checked after the exchange (spec 5.1.3.1) | live (since 2026-10-26; before that the "live" label was wrong, see incident 3) |
+| `DataDigest` = the same hash value the ES signs (`SHA-256` of the order data without CR, LF, Ctrl-Z) | Spec 5.3 ("the hash value of the order data that has been signed"), 5.5.1.1.1 (`@SignatureVersion` names the process that computes it), 14 | live (accepted on PUB/HCS/HCA and BTU) | live |
 | Order data: deflate → AES-128-CBC (null IV) → base64; transaction key RSA-PKCS1v15 to E002 | Spec 15 (encryption annex refs) | live (downloads decrypt, uploads accepted) | live |
 | BTF structures (BTD/BTU order params), `SignatureFlag` replaces order attributes | Spec BTF chapters; amendment table | XSD + live | live |
 | Receipt code `011000` = positive acknowledgement | Observed; Annex 1 return codes | live | live |
