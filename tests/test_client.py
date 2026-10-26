@@ -2,6 +2,7 @@
 
 import datetime
 import io
+import logging
 import zipfile
 from decimal import Decimal
 from pathlib import Path
@@ -26,6 +27,7 @@ from ebicsclient.errors import (
     DateRangeMismatchError,
     KeyChangeUnconfirmedError,
     MessageFormatError,
+    MessageVersionMismatchError,
     ResponseAuthenticationError,
     ReturnCodeError,
     TransportError,
@@ -36,6 +38,7 @@ from ebicsclient.models import (
     PAIN_001,
     Bank,
     BankKeys,
+    BusinessTransactionFormat,
     DateRange,
     InitializationState,
     Keyring,
@@ -43,6 +46,7 @@ from ebicsclient.models import (
     OutputFormat,
     ReceiptPolicy,
     User,
+    VersionPolicy,
 )
 
 _NS = "urn:org:ebics:H005"
@@ -153,7 +157,11 @@ def test_hpb_stores_and_returns_the_bank_keys(keyring: Keyring) -> None:
 
 
 def _download_client(
-    responses: list[bytes | Exception], keyring: Keyring, bank_keys: BankKeys
+    responses: list[bytes | Exception],
+    keyring: Keyring,
+    bank_keys: BankKeys,
+    *,
+    version_policy: VersionPolicy = VersionPolicy.ACCEPT_ANY,
 ) -> tuple[Client, _QueueTransport]:
     transport = _QueueTransport(responses)
     client = Client(
@@ -161,6 +169,7 @@ def _download_client(
         User(partner_id="PARTNER1", user_id="USER1"),
         keyring,
         transport=transport,  # type: ignore[arg-type]
+        version_policy=version_policy,
     )
     client._bank_keys = bank_keys  # HPB already ran; wire the keys the download needs.
     return client, transport
@@ -421,6 +430,165 @@ def test_undated_typed_download_parses_before_the_receipt(
     with pytest.raises(MessageFormatError):
         getattr(client, method)()
     assert _receipt_code(transport.posts[-1]) == "1"
+
+
+def _statement_zip(namespace: str | None) -> bytes:
+    declaration = f' xmlns="{namespace}"' if namespace is not None else ""
+    document = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Document{declaration}><BkToCstmrStmt>"
+        "<Stmt><Id>STMT-1</Id>"
+        "<Acct><Id><IBAN>CH9300762011623852957</IBAN></Id></Acct>"
+        "</Stmt></BkToCstmrStmt></Document>"
+    ).encode()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("statement.xml", document)
+    return buffer.getvalue()
+
+
+_ISO = "urn:iso:std:iso:20022:tech:xsd:"
+
+
+def test_strict_download_accepts_the_requested_version(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    responses = make_download_responses(
+        keyring, _statement_zip(f"{_ISO}camt.053.001.08"), bank_keyring=bank_keyring
+    )
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), version_policy=VersionPolicy.STRICT
+    )
+    assert len(client.download_statements()) == 1
+    assert _receipt_code(transport.posts[-1]) == "0"
+
+
+def test_strict_download_rejects_another_version_before_the_receipt(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # The content parses either way; under STRICT the version itself is the discrepancy.
+    responses = make_download_responses(
+        keyring, _statement_zip(f"{_ISO}camt.053.001.04"), bank_keyring=bank_keyring
+    )
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), version_policy=VersionPolicy.STRICT
+    )
+    with pytest.raises(MessageVersionMismatchError) as caught:
+        client.download_statements()
+    assert caught.value.requested == "camt.053 version 08"
+    assert caught.value.delivered == "camt.053.001.04"
+    assert _receipt_code(transport.posts[-1]) == "1"
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    [
+        f"{_ISO}camt.054.001.08",  # another message at the requested version
+        "urn:example:statement",  # not an ISO 20022 message namespace
+        None,  # no namespace at all
+    ],
+)
+def test_strict_download_rejects_a_document_that_does_not_name_the_request(
+    namespace: str | None, keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    responses = make_download_responses(
+        keyring, _statement_zip(namespace), bank_keyring=bank_keyring
+    )
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), version_policy=VersionPolicy.STRICT
+    )
+    with pytest.raises(MessageVersionMismatchError):
+        client.download(CAMT_053)
+    assert _receipt_code(transport.posts[-1]) == "1"
+
+
+def test_strict_download_ignores_the_variant_the_request_cannot_name(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # A BTF carries no variant (the library never sends the MsgName variant attribute), so
+    # only the message name and version are compared.
+    order_data = _statement_zip(f"{_ISO}camt.053.002.08")
+    responses = make_download_responses(keyring, order_data, bank_keyring=bank_keyring)
+    client, _ = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), version_policy=VersionPolicy.STRICT
+    )
+    assert client.download(CAMT_053) == order_data
+
+
+def test_strict_download_checks_the_version_before_the_callers_validate(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    responses = make_download_responses(
+        keyring, _statement_zip(f"{_ISO}camt.053.001.04"), bank_keyring=bank_keyring
+    )
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), version_policy=VersionPolicy.STRICT
+    )
+    validated: list[bytes] = []
+    with pytest.raises(MessageVersionMismatchError):
+        client.download(CAMT_053, validate=validated.append)
+    assert validated == []
+    assert _receipt_code(transport.posts[-1]) == "1"
+
+
+def test_strict_download_does_not_compare_a_btf_without_a_version(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # Such a BTF requests no version (ZKB's OTH/msc result ZIP, say), so there is nothing
+    # the delivery could contradict.
+    unversioned = BusinessTransactionFormat(
+        service_name="OTH", message_name="msc", scope="BIL", container="ZIP"
+    )
+    responses = make_download_responses(keyring, b"not XML", bank_keyring=bank_keyring)
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), version_policy=VersionPolicy.STRICT
+    )
+    assert client.download(unversioned) == b"not XML"
+    assert _receipt_code(transport.posts[-1]) == "0"
+
+
+def test_default_policy_returns_another_version_but_warns(
+    keyring: Keyring, bank_keyring: Keyring, caplog: pytest.LogCaptureFixture
+) -> None:
+    responses = make_download_responses(
+        keyring, _statement_zip(f"{_ISO}camt.053.001.04"), bank_keyring=bank_keyring
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with caplog.at_level(logging.WARNING, logger="ebicsclient.client"):
+        assert len(client.download_statements()) == 1
+    assert _receipt_code(transport.posts[-1]) == "0"
+    (record,) = caplog.records
+    assert record.levelno == logging.WARNING
+    assert "requested camt.053 version 08, the bank delivered camt.053.001.04" in (
+        record.getMessage()
+    )
+
+
+def test_default_policy_does_not_warn_when_the_version_matches(
+    keyring: Keyring, bank_keyring: Keyring, caplog: pytest.LogCaptureFixture
+) -> None:
+    responses = make_download_responses(
+        keyring, _statement_zip(f"{_ISO}camt.053.001.08"), bank_keyring=bank_keyring
+    )
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with caplog.at_level(logging.WARNING, logger="ebicsclient.client"):
+        client.download_statements()
+    assert caplog.records == []
+
+
+def test_default_policy_never_fails_a_raw_download_it_cannot_compare(
+    keyring: Keyring, bank_keyring: Keyring, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The lenient check only reports: data that is not XML still comes back from a raw
+    # download, and the warning carries no order data.
+    responses = make_download_responses(keyring, b"secret not-XML bytes", bank_keyring=bank_keyring)
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with caplog.at_level(logging.WARNING, logger="ebicsclient.client"):
+        assert client.download(CAMT_053) == b"secret not-XML bytes"
+    assert _receipt_code(transport.posts[-1]) == "0"
+    (record,) = caplog.records
+    assert "could not be compared" in record.getMessage()
+    assert "secret" not in record.getMessage()
 
 
 def _upload_response(

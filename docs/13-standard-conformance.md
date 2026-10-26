@@ -55,6 +55,7 @@ absent, not excluded — unless the **Notes** say otherwise.
 | Non-consuming read (`ReceiptPolicy.KEEP`) | Mandated | ✅ | XSD + spec | Deliberate negative ack |
 | Fetch statements/reports for a specific date range — BTD `DateRange` (inclusive) | Mandated | ✅ | live | The library sends the range; out-of-range data fails closed (`DateRangeMismatchError`), never returned as a match |
 | ↳ the bank actually applying that range, and re-serving already-delivered data | Bank-dependent | 🟡 | | Not guaranteed by the standard; confirm per bank before relying on a dated re-download |
+| Delivered message version checked against the BTF `version` (opt-in `VersionPolicy.STRICT`) | Mandated | ✅ | live | Under `STRICT`, a document of another message or version fails closed (`MessageVersionMismatchError`, negative receipt). The default `ACCEPT_ANY` returns what the bank delivered and logs a warning on a mismatch. ZKB never substitutes a version: a request for a version with no data waiting returns `090005` |
 | Generic order parameters — `Parameter` Name/Value pairs | Mandated (optional) | ❌ | | Bank-specific query params alongside `DateRange`; not exposed (a custom BTF still works) |
 | Arbitrary business download via a custom BTF | Mandated | ✅ | live | Any `BusinessTransactionFormat`, raw bytes returned |
 | camt.053 EOD statements — typed parser | Mandated (ISO) | ✅ | live | |

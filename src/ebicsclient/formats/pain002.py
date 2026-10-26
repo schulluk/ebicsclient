@@ -9,8 +9,9 @@ status-report download (a single pain.002 XML document or a ZIP container of the
 :class:`~ebicsclient.models.PaymentStatusReport` models.
 
 The element names are read namespace-agnostically: the parser adopts whatever pain.002
-namespace the document declares (``...pain.002.001.10``, ``.03``, …) from its root, so a
-bank sending a different version is still parsed without a code change. The parsers were
+namespace the document declares (``...pain.002.001.10``, ``.03``, …) from its root.
+Whether the delivered version must equal the requested one is the client's decision
+(:class:`~ebicsclient.VersionPolicy`), not the parser's. The parsers were
 built against genuine ``pain.002.001.10`` reports produced by the ZKB test platform
 (``ACTC``, ``ACCP``, ``PART`` with per-transaction rejects, and ``RJCT`` with a
 payment-level reason).

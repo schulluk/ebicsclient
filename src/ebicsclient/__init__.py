@@ -30,6 +30,7 @@ from ebicsclient.errors import (
     KeyringError,
     KeyringFormatError,
     MessageFormatError,
+    MessageVersionMismatchError,
     MissingDependencyError,
     ProtocolError,
     ResponseAuthenticationError,
@@ -92,6 +93,7 @@ from ebicsclient.models import (
     TransactionStatus,
     UploadPayload,
     User,
+    VersionPolicy,
 )
 
 # A library must never configure logging — that is the application's job. Attach a
@@ -149,6 +151,7 @@ __all__ = [
     "Letter",
     "MappingCertificateProvider",
     "MessageFormatError",
+    "MessageVersionMismatchError",
     "MissingDependencyError",
     "Notification",
     "OrderTypeInfo",
@@ -171,6 +174,7 @@ __all__ = [
     "UnknownReturnCodeError",
     "UploadPayload",
     "User",
+    "VersionPolicy",
     "__version__",
     "bank_key_hashes",
     "certificate_fingerprint",

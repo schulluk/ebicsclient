@@ -130,6 +130,33 @@ class DateRangeMismatchError(EbicsError):
     """
 
 
+class MessageVersionMismatchError(EbicsError):
+    """A strict download delivered a different message or version than it requested.
+
+    Raised only under :attr:`~ebicsclient.VersionPolicy.STRICT`, when a delivered document's
+    root namespace names another ISO 20022 message or version than the BTF requested (say
+    ``camt.053.001.04`` for ``camt.053`` version ``08``), or names no ISO 20022 message at
+    all. The download is **not** acknowledged when this is raised: the client sends a
+    negative receipt, so the data stays available at the bank.
+
+    Args:
+        requested: The requested message and version, e.g. ``"camt.053 version 08"``.
+        delivered: What the document declared, e.g. ``"camt.053.001.04"``.
+
+    Attributes:
+        requested: The requested message and version.
+        delivered: What the delivered document declared.
+    """
+
+    def __init__(self, *, requested: str, delivered: str) -> None:
+        self.requested = requested
+        self.delivered = delivered
+        super().__init__(
+            f"Requested {requested}, the bank delivered {delivered}. The data was NOT "
+            f"acknowledged and remains available at the bank."
+        )
+
+
 class KeyChangeUnconfirmedError(EbicsError):
     """A key change (PUB, HCA, HCS) reached the bank, but its outcome is unknown.
 

@@ -134,6 +134,17 @@ def test_upload_rejects_a_string_document(keyring: Keyring) -> None:
     assert "'rb'" in message  # the fix is in the message
 
 
+def test_client_rejects_a_string_version_policy(keyring: Keyring) -> None:
+    with pytest.raises(TypeError) as caught:
+        Client(
+            Bank(host_id="HOST", url="https://example.com/ebicsweb"),
+            User(partner_id="PARTNER1", user_id="USER1"),
+            keyring,
+            version_policy="strict",  # type: ignore[arg-type]
+        )
+    assert "version_policy must be a VersionPolicy" in str(caught.value)
+
+
 def test_transport_rejects_a_non_string_url() -> None:
     with pytest.raises(TransportError) as caught:
         Transport(12345)  # type: ignore[arg-type]

@@ -22,10 +22,13 @@ from ebicsclient.errors import (
     DateRangeMismatchError,
     EbicsError,
     KeyChangeUnconfirmedError,
+    MessageFormatError,
+    MessageVersionMismatchError,
     ReturnCodeError,
     UnknownReturnCodeError,
 )
-from ebicsclient.formats import camt052, camt053, camt054, pain002
+from ebicsclient.formats import camt052, camt053, camt054, iso20022, pain002
+from ebicsclient.formats.container import extract_documents
 from ebicsclient.models import (
     CAMT_052,
     CAMT_053,
@@ -51,6 +54,7 @@ from ebicsclient.models import (
     SubscriberInfo,
     UploadPayload,
     User,
+    VersionPolicy,
 )
 from ebicsclient.protocol import h005
 from ebicsclient.transport import Transport
@@ -98,6 +102,74 @@ def _assert_entry_in_range(entry: Entry, date_range: DateRange) -> None:
         )
 
 
+def _version_mismatch(btf: BusinessTransactionFormat, order_data: bytes) -> str | None:
+    """Describe the first delivered document that is not the message and version ``btf`` names.
+
+    The comparison reads each document's root namespace, which for ISO 20022 names the
+    exact message, variant and version (see :mod:`ebicsclient.formats.iso20022`). The
+    request carries no variant, so only the message name and version are compared. A
+    document that names no ISO 20022 message cannot be shown to match and counts as a
+    mismatch.
+
+    Returns:
+        What the first mismatching document declares (e.g. ``"camt.053.001.04"``), or
+        ``None`` if every document is the requested message and version.
+
+    Raises:
+        MessageFormatError: the data is not a readable container or XML document.
+    """
+    for document in extract_documents(order_data):
+        namespace = iso20022.root_namespace(document)
+        delivered = iso20022.message_identifier(namespace)
+        if delivered is None:
+            if namespace is None:
+                return "a document that declares no namespace"
+            return f"a document in namespace {namespace!r}, which names no ISO 20022 message"
+        if (delivered.message_name, delivered.version) != (btf.message_name, btf.message_version):
+            return str(delivered)
+    return None
+
+
+def _version_policy_check(
+    btf: BusinessTransactionFormat, version_policy: VersionPolicy
+) -> Callable[[bytes], None]:
+    """Build the pre-receipt check that applies ``version_policy`` to a download of ``btf``.
+
+    ``STRICT`` raises on a mismatch, so the download is not acknowledged. ``ACCEPT_ANY``
+    logs a warning and lets the download continue; it never raises, so the lenient policy
+    cannot fail a download it would otherwise have returned.
+    """
+    requested = f"{btf.message_name} version {btf.message_version}"
+
+    def strict_check(order_data: bytes) -> None:
+        delivered = _version_mismatch(btf, order_data)
+        if delivered is not None:
+            raise MessageVersionMismatchError(requested=requested, delivered=delivered)
+
+    def lenient_check(order_data: bytes) -> None:
+        try:
+            delivered = _version_mismatch(btf, order_data)
+        except MessageFormatError:
+            # The error text is not logged: it describes the order data, which never
+            # goes to the log (docs/06). A typed download raises it from its parser.
+            logger.warning(
+                "Download: requested %s, but the delivered data is not readable XML, so "
+                "its version could not be compared",
+                requested,
+            )
+            return
+        if delivered is not None:
+            logger.warning(
+                "Download: requested %s, the bank delivered %s. Returned anyway under "
+                "VersionPolicy.ACCEPT_ANY; VersionPolicy.STRICT would reject it and leave "
+                "the data at the bank",
+                requested,
+                delivered,
+            )
+
+    return strict_check if version_policy is VersionPolicy.STRICT else lenient_check
+
+
 class Client:
     """An EBICS client for one subscriber at one bank."""
 
@@ -110,6 +182,7 @@ class Client:
         transport: Transport | None = None,
         certificate_provider: CertificateProvider = DEFAULT_CERTIFICATE_PROVIDER,
         bank_certificate_verifier: BankCertificateVerifier | None = None,
+        version_policy: VersionPolicy = VersionPolicy.ACCEPT_ANY,
     ) -> None:
         """Configure the client.
 
@@ -125,13 +198,28 @@ class Client:
             bank_certificate_verifier: If given, validates the bank's certificates during HPB
                 (e.g. :class:`~ebicsclient.certificates.TrustAnchorVerifier`). ``None`` skips
                 chain validation; you must still verify the published bank-key hashes.
+            version_policy: Whether every download must deliver the message version its
+                BTF requested (see :class:`~ebicsclient.VersionPolicy`). ``ACCEPT_ANY``
+                (default) returns whatever the bank delivered and logs a warning on a
+                mismatch; ``STRICT`` rejects a mismatch before the receipt, leaving the
+                data at the bank.
+
+        Raises:
+            TypeError: ``version_policy`` is not a :class:`~ebicsclient.VersionPolicy`.
         """
+        if not isinstance(version_policy, VersionPolicy):
+            # A plain "strict" string would compare unequal to VersionPolicy.STRICT by
+            # identity and silently run the lenient policy instead.
+            raise TypeError(
+                f"version_policy must be a VersionPolicy, got {type(version_policy).__name__}"
+            )
         self._bank = bank
         self._user = user
         self._keyring = keyring
         self._transport = transport if transport is not None else Transport(bank.url)
         self._certificate_provider = certificate_provider
         self._bank_certificate_verifier = bank_certificate_verifier
+        self._version_policy = version_policy
         self._bank_keys: BankKeys | None = None
 
     @property
@@ -329,8 +417,9 @@ class Client:
                 ``KEEP`` leaves it available for a later download (a non-consuming read).
             validate: An optional check run on the decrypted order data *before* the receipt.
                 If it raises, the download is not acknowledged (negative receipt) and the
-                exception propagates — the seam the dated convenience methods use to reject
-                out-of-range data.
+                exception propagates — the seam the typed convenience methods use to parse
+                and check the data before it is consumed. The client's
+                :class:`~ebicsclient.VersionPolicy` check runs first.
 
         Returns:
             The decrypted, decompressed order-data bytes. For a container format this is the
@@ -342,7 +431,13 @@ class Client:
             ProtocolError: a response could not be parsed.
             ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
             CryptoError: the order data could not be decrypted.
+            MessageVersionMismatchError: under ``VersionPolicy.STRICT``, a delivered document
+                is not the message and version ``btf`` requested (the download is left
+                un-acknowledged).
+            MessageFormatError: under ``VersionPolicy.STRICT``, a delivered document is not
+                readable XML (the download is left un-acknowledged).
         """
+        validate = self._with_version_policy(btf, validate)
         bank_keys = self._require_bank_keys("Download")
         logger.info(
             "Download: opening a %s/%s transaction%s",
@@ -358,6 +453,26 @@ class Client:
         return self._run_download_transaction(
             request, bank_keys, validate=validate, receipt_policy=receipt_policy
         )
+
+    def _with_version_policy(
+        self,
+        btf: BusinessTransactionFormat,
+        validate: Callable[[bytes], None] | None,
+    ) -> Callable[[bytes], None] | None:
+        # A BTF without a message_version requests no version, so there is nothing to
+        # compare; every other download checks the delivery before the caller's check.
+        if btf.message_version is None:
+            return validate
+        version_check = _version_policy_check(btf, self._version_policy)
+        if validate is None:
+            return version_check
+        caller_check = validate
+
+        def check_version_then_validate(order_data: bytes) -> None:
+            version_check(order_data)
+            caller_check(order_data)
+
+        return check_version_then_validate
 
     def _download_parsed(
         self,
@@ -619,6 +734,9 @@ class Client:
             DateRangeMismatchError: a returned entry falls outside ``date_range``.
             MessageFormatError: the downloaded camt.053 data could not be parsed (the
                 download is left un-acknowledged).
+            MessageVersionMismatchError: under ``VersionPolicy.STRICT``, the bank
+                delivered another message version (the download is left
+                un-acknowledged).
         """
         return self._download_parsed(
             CAMT_053,
@@ -659,6 +777,9 @@ class Client:
             DateRangeMismatchError: a returned entry falls outside ``date_range``.
             MessageFormatError: the downloaded camt.052 data could not be parsed (the
                 download is left un-acknowledged).
+            MessageVersionMismatchError: under ``VersionPolicy.STRICT``, the bank
+                delivered another message version (the download is left
+                un-acknowledged).
         """
         return self._download_parsed(
             CAMT_052,
@@ -701,6 +822,9 @@ class Client:
             DateRangeMismatchError: a returned entry falls outside ``date_range``.
             MessageFormatError: the downloaded camt.054 data could not be parsed (the
                 download is left un-acknowledged).
+            MessageVersionMismatchError: under ``VersionPolicy.STRICT``, the bank
+                delivered another message version (the download is left
+                un-acknowledged).
         """
         return self._download_parsed(
             btf,
@@ -741,6 +865,9 @@ class Client:
             CryptoError: the order data could not be decrypted.
             MessageFormatError: the downloaded pain.002 data could not be parsed (the
                 download is left un-acknowledged).
+            MessageVersionMismatchError: under ``VersionPolicy.STRICT``, the bank
+                delivered another message version (the download is left
+                un-acknowledged).
         """
         return self._download_parsed(
             PAIN_002, pain002.parse, date_range=date_range, receipt_policy=receipt_policy

@@ -9,7 +9,9 @@ module holds that shared machinery; the thin per-type modules
 :mod:`~ebicsclient.formats.camt054`) only name their wrapper elements and models.
 
 Element names are read namespace-agnostically: each document's camt namespace is adopted
-from its root, so a different message version still parses without a code change.
+from its root, so every version this shape covers parses. Whether the delivered version
+must equal the requested one is the client's decision
+(:class:`~ebicsclient.VersionPolicy`), not the parser's.
 """
 
 import datetime

@@ -900,6 +900,29 @@ class ReceiptPolicy(StrEnum):
     KEEP = "keep"
 
 
+class VersionPolicy(StrEnum):
+    """Whether a download must deliver the message version its BTF requested.
+
+    A download request names the ISO 20022 message and version it wants (the BTF
+    ``MsgName`` with its ``version`` attribute), and every delivered ISO 20022 document
+    declares the message it actually is in its root namespace
+    (``urn:iso:std:iso:20022:tech:xsd:camt.053.001.08``). The two can differ — a bank in a
+    format transition, a misconfigured order type — even when the content is equivalent.
+
+    - ``ACCEPT_ANY``: return whatever the bank delivered; the parsers read every camt and
+      pain.002 version without a code change (default). The comparison still runs, and a
+      mismatch is logged as a warning on the ``ebicsclient.client`` logger.
+    - ``STRICT``: before the receipt, compare each delivered document's message name and
+      version with the request. A mismatch raises
+      :class:`~ebicsclient.errors.MessageVersionMismatchError` and sends a negative receipt,
+      so the data stays at the bank. A BTF without a ``message_version`` requests no
+      version and is not compared; the library sends no ``variant``, so any variant passes.
+    """
+
+    ACCEPT_ANY = "accept_any"
+    STRICT = "strict"
+
+
 class OutputFormat(StrEnum):
     """The rendering format for the initialisation letter.
 
