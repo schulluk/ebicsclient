@@ -86,15 +86,53 @@ These are the entries our camt.053 parser will encounter in the downloaded state
 | Capability | Platform setting | Our code | Status |
 | --- | --- | --- | --- |
 | Handshake (INI/HIA/HPB) | mit Schlüsseln profile | `client.ini/hia/hpb` | ✅ verified end to end |
-| End-of-day statement download | camt.053 enabled, camt.053.001.08 | `client.download(CAMT_053)` / `download_statements()` | ⏳ built + XSD-valid; **live download not yet run** |
-| camt.053 parsing (balances, entries) | Standard-Buchungen | `formats/camt053.py` | ⏳ unit-tested; not yet run on real simulation output |
-| Intraday statement (camt.052) | disabled | — | ⬜ not implemented (not enabled on the platform) |
-| Booking advices (camt.054 incl. QRR/SCOR/LSV) | three camt.054 enabled | — | ⬜ not implemented (out of MVP scope) |
-| pain.001 upload | pain.001.001.09.ch.03 | — | ⬜ M3 |
-| pain.002 status back | validation message on; channel = e-Banking | — | ⬜ M3 (needs channel → Datalink EBICS) |
-| Reject simulation (negative path) | off | — | ⬜ M3 (enable to test rejects) |
+| End-of-day statement download | camt.053 enabled, camt.053.001.08 | `client.download(CAMT_053)` / `download_statements()` | ✅ live (balances reconcile) |
+| camt.053 parsing (balances, entries) | Standard-Buchungen | `formats/camt053.py` | ✅ live |
+| Intraday statement (camt.052) | produced since at least 2026-10-26 (the table above predates it) | `download_intraday_statements()` | ✅ live |
+| Booking advices (camt.054 incl. QRR/SCOR/LSV) | QRR/SCOR/LSV collective resolutions enabled | `download_booking_advices(btf)` | ✅ live; see the simulation section below |
+| pain.001 upload | pain.001.001.09.ch.03 | `client.upload(PAIN_001, …)` | ✅ live (processed since the A006 fix) |
+| pain.002 status back | validation message on; channel = Datalink EBICS | `download_payment_status_reports()` | ✅ live |
+| Reject simulation (negative path) | every third transaction | — | ✅ live (`PART`, two rejected) |
+| Simulated incoming credits (QRR/SCOR/NON/LSV) | CSV upload `OTH/BIL/CH004TPS/csv` | `tools/zkb-incoming-payments.py` | ✅ live (test tool, not library API) |
 
 **Legend:** ✅ verified · ⏳ implemented, live-verification pending · ⬜ not started / out of scope.
+
+## Simulated incoming credits over EBICS (validated 2026-10-26)
+
+The platform simulates incoming QR-bill credits with a QR reference (`QRR`) or an ISO 11649
+creditor reference (`SCOR`), credits without a reference (`NON`), and LSV+ collections (`LSV`)
+from a CSV file (manual section 2.3.1), uploaded over EBICS as `OTH / BIL / CH004TPS / csv`
+(ZKB order type `XTC`). [`tools/zkb-incoming-payments.py`](../tools/zkb-incoming-payments.py)
+builds that file, uploads it, then downloads and parses everything HAA lists and reconciles
+the credits against what it sent.
+
+A run of eight credits (three QRR, two SCOR, one NON, two LSV) was processed within seconds; the
+platform's protocol (`Protokoll.txt`, in the `XTD` archive) reported the file correct. What came
+back, and where:
+
+| BTF (ZKB order type) | Content |
+| --- | --- |
+| `STM/CH/camt.052` (Z52), `EOP/CH/camt.053` (Z53) | each product as one collective credit for its total, next to the predefined bookings enabled under *Standard-Buchungen* |
+| `REP/CH/XQRR/camt.054` (ZQR) | the QRR collective credit, with one `TxDtls` per payment carrying its QR reference |
+| `REP/CH/XSCR/camt.054` (ZRF) | the SCOR collective credit, with the creditor references |
+| `REP/CH/XDDD/camt.054` (ZS3) | the LSV+ collective credit — `XDDD` is the LSV+ variant |
+| `REP/CH/XDCI/camt.054` (ZS2) | one notification per booking of the day, credits and debits alike |
+| `REP/CH/XABK/camt.054` (ZS4) | after a pain.001 upload: the batch debit of the payment file with its single transactions |
+| `OTH/BIL/CH004TPE/msc` (XTD) | a ZIP holding a ZIP of every result file plus `Protokoll.txt` |
+
+Three platform behaviours to know:
+
+- **The simulated credits came back as camt version 04**, although the pain.001 upload earlier
+  the same day produced version 08 and the settings above say camt.05x.001.08. HAA listed
+  only the version-04 BTFs. Version 08 of `XQRR`/`XSCR`/`XDDD` is therefore not yet
+  validated with data; the bank does accept those tuples (`090005`, while an unregistered
+  option is refused with `091005`).
+- **Each collective-resolution ZIP held its document twice** (byte-identical, same
+  notification ID), while the `XTD` archive held one copy. The parser returns what the bank
+  sent, so a caller summing camt.054 amounts must de-duplicate by notification ID.
+- **Every processed file produces its own statement**, not a running one: each camt.053 opens
+  at the same balance and holds that file's bookings plus the predefined *Standard-Buchungen*
+  (manual section 2.4), which therefore recur in every run.
 
 ## How the simulation is driven (validated 2026-07-05)
 
@@ -160,5 +198,6 @@ rightly, as the 2026-10-26 correction above shows.
 
 1. ~~Ask ZKB support why EBICS-submitted pain.001 files are never processed~~ — resolved
    2026-10-26: the cause was the client's A006 signature, not the platform (see above).
-2. **camt.054 booking advices** (QRR/SCOR/LSV are enabled here) are a plausible near-term read
-   feature after the MVP, but remain out of the current scope.
+2. ~~camt.054 booking advices~~ — parsed live since 2026-10-26 (see the simulation section).
+   Still open: why the simulated credits arrive as camt version 04 (check *Simulation nach*
+   on the Defaultwerte page), and exposing the single transactions of a collective booking.

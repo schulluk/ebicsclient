@@ -47,17 +47,30 @@ platform's `pain.001.001.09.ch.03` validation version; see [docs/09](09-zkb-test
 | ZRF | camt.054 — CH collective-booking info (SCOR) | REP | CH | XSCR | camt.054 | 04 / 08 | ZIP |
 | XTD | ZIP archive of all result files | OTH | BIL | CH004TPE | msc | — | ZIP |
 
-The row we consume today is **Z53 / EOP / CH / camt.053 / 08 / ZIP**, which is exactly
-`models.CAMT_053`. `XTD` (`OTH / BIL / CH004TPE / msc`) is a test-platform aggregate that bundles
-every result file into one ZIP — useful for eyeballing what a run produced, but not a typed
-business message.
+`XTD` (`OTH / BIL / CH004TPE / msc`) and `XTC` (`OTH / BIL / CH004TPS / csv`) exist only on the
+test platform: `XTD` bundles every result file of a run into one ZIP, and `XTC` feeds the
+simulation of incoming credits. Both are used by
+[`tools/zkb-incoming-payments.py`](../tools/zkb-incoming-payments.py), not by the library API.
 
-## Mapping to milestones
+Where this catalogue and the bank's HTD registry disagree, HTD wins. HTD registers
+`PSR / CH / pain.002 / 10` **without** a container (a request with `ZIP` is refused with
+`091005`), and the SEPA `SCT / pain.001` entries **without** the `GLB` scope.
 
-- **M2 (read, current):** `Z53` camt.053 v08 — implemented as `CAMT_053`.
-- **M3 (write):** `XE2` pain.001 v09 upload → `Z01` pain.002 v10 download for the status report.
-- **Post-MVP backlog:** `Z52` camt.052 intraday, and the `Z54`/`ZS*`/`ZQR`/`ZRF` camt.054 advices
-  (several are enabled on the platform — see [docs/09](09-zkb-test-platform-settings.md)).
+## Library constants
 
-When these are built, each becomes a `BusinessTransactionFormat` constant beside `CAMT_053`,
-sourced from the row above rather than assumed.
+Each constant is the row above, checked against the bank's HTD registry
+(`tests/test_h005.py`) and downloaded or uploaded live (see [docs/09](09-zkb-test-platform-settings.md)).
+
+| Order type | Constant | Content (observed live) |
+| --- | --- | --- |
+| XE2 v09 | `PAIN_001` | payment submission |
+| Z01 v10 | `PAIN_002` | payment status reports |
+| Z52 v08 | `CAMT_052` | intraday report |
+| Z53 v08 | `CAMT_053` | end-of-day statement |
+| Z54 v08 | `CAMT_054` | not delivered in the 2026-10-26 runs; ZKB used the variants below |
+| ZS2 v08 | `CAMT_054_BOOKING_INFORMATION` | one notification per booking, credits and debits |
+| ZS4 v08 | `CAMT_054_COLLECTIVE_DEBITS` | a payment file's batch debit with its single transactions |
+| ZQR, ZRF, ZS3 | — | collective QRR, SCOR and LSV+ credits; delivered so far only in version 04, so no constant yet |
+
+Until a variant has its own constant, `download_booking_advices` takes any of these tuples as a
+`BusinessTransactionFormat`.

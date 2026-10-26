@@ -275,15 +275,41 @@ CAMT_052 = BusinessTransactionFormat(
 )
 
 #: The Swiss camt.054.001.08 debit/credit notification download (the ZKB ``Z54`` order type,
-#: ``REP / CH / camt.054 / 08 / ZIP``); confirmed against the bank's HTD registry. The
-#: QRR/SCOR/LSV collective-resolution variants use the same tuple with a ``service_option``
-#: (``XQRR``/``XSCR``/…, see docs/10-btf-order-types.md).
+#: ``REP / CH / camt.054 / 08 / ZIP``); confirmed against the bank's HTD registry. ZKB
+#: delivers its notifications under variants of this tuple that add a ``service_option`` —
+#: see the constants below and docs/10-btf-order-types.md.
 CAMT_054 = BusinessTransactionFormat(
     service_name="REP",
     message_name="camt.054",
     scope="CH",
     message_version="08",
     container="ZIP",
+)
+
+#: The Swiss camt.054.001.08 booking information (the ZKB ``ZS2`` order type, ``REP / CH /
+#: XDCI / camt.054 / 08 / ZIP``): one notification per booking, credits and debits alike.
+#: Confirmed against the bank's HTD registry and downloaded live from the ZKB test platform
+#: (docs/09).
+CAMT_054_BOOKING_INFORMATION = BusinessTransactionFormat(
+    service_name="REP",
+    message_name="camt.054",
+    scope="CH",
+    message_version="08",
+    container="ZIP",
+    service_option="XDCI",
+)
+
+#: The Swiss camt.054.001.08 details of collective debits (the ZKB ``ZS4`` order type,
+#: ``REP / CH / XABK / camt.054 / 08 / ZIP``): a payment file booked as one batch debit,
+#: reported with its single transactions. Confirmed against the bank's HTD registry and
+#: downloaded live from the ZKB test platform (docs/09).
+CAMT_054_COLLECTIVE_DEBITS = BusinessTransactionFormat(
+    service_name="REP",
+    message_name="camt.054",
+    scope="CH",
+    message_version="08",
+    container="ZIP",
+    service_option="XABK",
 )
 
 #: The Swiss pain.001.001.09 payment-submission upload (no container). Matches the ZKB ``XE2``

@@ -58,9 +58,10 @@ absent, not excluded — unless the **Notes** say otherwise.
 | Generic order parameters — `Parameter` Name/Value pairs | Mandated (optional) | ❌ | | Bank-specific query params alongside `DateRange`; not exposed (a custom BTF still works) |
 | Arbitrary business download via a custom BTF | Mandated | ✅ | live | Any `BusinessTransactionFormat`, raw bytes returned |
 | camt.053 EOD statements — typed parser | Mandated (ISO) | ✅ | live | |
-| camt.052 intraday reports — typed parser | Mandated (ISO) | ✅ | spec-vector | |
-| camt.054 booking advices (incl. QRR/SCOR/LSV) — typed parser | Mandated (ISO) | ✅ | spec-vector | |
-| pain.002 payment status reports — typed parser | Mandated (ISO) | ✅ | spec-vector | |
+| camt.052 intraday reports — typed parser | Mandated (ISO) | ✅ | live | Read from ZKB reports delivered over EBICS, in camt.052.001.08 and .04 |
+| camt.054 booking advices (incl. QRR/SCOR/LSV) — typed parser | Mandated (ISO) | ✅ | live | Read from ZKB advices delivered over EBICS. Simulated QRR, SCOR, LSV+ and unreferenced credits appear with their exact totals ([`tools/zkb-incoming-payments.py`](../tools/zkb-incoming-payments.py)). Variant BTFs: `CAMT_054_BOOKING_INFORMATION` (`XDCI`), `CAMT_054_COLLECTIVE_DEBITS` (`XABK`); the QRR/SCOR/LSV+ variants (`XQRR`/`XSCR`/`XDDD`) have so far delivered data only in version 04 — see [docs/09](09-zkb-test-platform-settings.md) |
+| ↳ single transactions of a collective booking (`NtryDtls/TxDtls`: QR or creditor reference, debtor, remittance information) | Mandated (ISO) | ❌ | | The parsed entry is the collective total; matching a QR-bill credit to its invoice needs the per-transaction reference, which is in the data but not exposed |
+| pain.002 payment status reports — typed parser | Mandated (ISO) | ✅ | live | Read from ZKB reports delivered over EBICS (`ACTC`, then `PART` with rejected transactions) |
 | HAA — order types with data available | Mandated | ✅ | live | |
 | HTD — *this subscriber's* data & permissions | Mandated | ✅ | live | |
 | HKD — *customer + all subscribers'* data | Mandated | ✅ | live | `customer_info()`; accounts and account-bound permissions are XSD-only (the test subscriber has none) |

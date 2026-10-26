@@ -30,11 +30,17 @@ from ebicsclient.errors import (
 )
 from ebicsclient.keys import CertificateUsage
 from ebicsclient.models import (
+    CAMT_052,
     CAMT_053,
+    CAMT_054,
+    CAMT_054_BOOKING_INFORMATION,
+    CAMT_054_COLLECTIVE_DEBITS,
     PAIN_001,
+    PAIN_002,
     AuthorisationLevel,
     Bank,
     BankKeys,
+    BusinessTransactionFormat,
     DateRange,
     Keyring,
     KeyRotation,
@@ -582,6 +588,32 @@ def test_parse_subscriber_info_reads_the_real_htd_response() -> None:
     upload_entries = [entry for entry in info.order_types if entry.admin_order_type == "BTU"]
     assert upload_entries
     assert all(entry.number_of_signatures_required == 0 for entry in upload_entries)
+
+
+@pytest.mark.parametrize(
+    "btf",
+    [
+        CAMT_052,
+        CAMT_053,
+        CAMT_054,
+        CAMT_054_BOOKING_INFORMATION,
+        CAMT_054_COLLECTIVE_DEBITS,
+        PAIN_001,
+        PAIN_002,
+    ],
+)
+def test_every_business_transaction_format_constant_is_registered_at_the_bank(
+    btf: BusinessTransactionFormat,
+) -> None:
+    # The bank's own HTD registry is the oracle for a BTF tuple: a constant that differs from
+    # the registration in any field (container, option, version) is refused with 091005.
+    order_data = (Path(__file__).parent / "data" / "htd_zkb_sample.xml").read_bytes()
+    permitted = {
+        entry.service
+        for entry in h005.parse_subscriber_info(order_data).permissions
+        if entry.service is not None
+    }
+    assert btf in permitted
 
 
 def test_parse_upload_initialisation_response_returns_the_transaction_id() -> None:
