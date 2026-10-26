@@ -25,6 +25,7 @@ from ebicsclient.errors import (
     CryptoError,
     DateRangeMismatchError,
     KeyChangeUnconfirmedError,
+    MessageFormatError,
     ResponseAuthenticationError,
     ReturnCodeError,
     TransportError,
@@ -396,6 +397,30 @@ def test_dated_download_is_date_only_and_ignores_time_of_day(
     client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
     assert len(client.download_statements(date_range=_JUNE)) == 1
     assert _receipt_code(transport.posts[-1]) == "0"  # start-day, early time → included
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "download_statements",
+        "download_intraday_statements",
+        "download_booking_advices",
+        "download_payment_status_reports",
+    ],
+)
+def test_undated_typed_download_parses_before_the_receipt(
+    method: str, keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # Without a date range there is no range check, but the parse itself must still run
+    # before the receipt: data the parser rejects stays at the bank (negative receipt)
+    # instead of being consumed by a positive receipt sent ahead of the parse.
+    responses = make_download_responses(
+        keyring, b"not a camt or pain document", bank_keyring=bank_keyring
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(MessageFormatError):
+        getattr(client, method)()
+    assert _receipt_code(transport.posts[-1]) == "1"
 
 
 def _upload_response(

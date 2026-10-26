@@ -7,7 +7,8 @@ fetching the bank's keys (HPB) and downloading statements.
 
 import base64
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from typing import TypeVar
 
 from ebicsclient import crypto, keys, letter
 from ebicsclient.certificates import (
@@ -62,11 +63,13 @@ logger = logging.getLogger(__name__)
 _SUBSCRIBER_STATE_INADMISSIBLE = "091002"
 
 
-def _dated_range_validator(
-    parse: Callable[[bytes], list[Statement]] | Callable[[bytes], list[Notification]],
+_Parsed = TypeVar("_Parsed")
+
+
+def _entries_in_range_check(
     date_range: DateRange,
-) -> Callable[[bytes], None]:
-    """Build a validator asserting every parsed booking entry falls within ``date_range``.
+) -> Callable[[Sequence[Statement | Notification]], None]:
+    """Build a check asserting every parsed booking entry falls within ``date_range``.
 
     ``DateRange`` is an optional EBICS element a bank may accept without honouring; if it
     ignores the filter and serves other data, the booking dates give it away. Booking dates
@@ -76,12 +79,12 @@ def _dated_range_validator(
     is not evidence of a mismatch and passes.
     """
 
-    def validate(order_data: bytes) -> None:
-        for document in parse(order_data):
+    def check(documents: Sequence[Statement | Notification]) -> None:
+        for document in documents:
             for entry in document.entries:
                 _assert_entry_in_range(entry, date_range)
 
-    return validate
+    return check
 
 
 def _assert_entry_in_range(entry: Entry, date_range: DateRange) -> None:
@@ -356,6 +359,34 @@ class Client:
             request, bank_keys, validate=validate, receipt_policy=receipt_policy
         )
 
+    def _download_parsed(
+        self,
+        btf: BusinessTransactionFormat,
+        parse: Callable[[bytes], list[_Parsed]],
+        *,
+        date_range: DateRange | None,
+        receipt_policy: ReceiptPolicy,
+        check: Callable[[list[_Parsed]], None] | None = None,
+    ) -> list[_Parsed]:
+        # Parse (and check) inside the pre-receipt hook rather than on the returned bytes:
+        # data the library cannot parse, or that fails a check, must stay at the bank
+        # (negative receipt) instead of being consumed by a positive receipt sent first.
+        parsed: list[_Parsed] = []
+
+        def parse_before_receipt(order_data: bytes) -> None:
+            documents = parse(order_data)
+            if check is not None:
+                check(documents)
+            parsed.extend(documents)
+
+        self.download(
+            btf,
+            date_range=date_range,
+            receipt_policy=receipt_policy,
+            validate=parse_before_receipt,
+        )
+        return parsed
+
     def _require_bank_keys(self, operation: str) -> BankKeys:
         if self._bank_keys is None:
             raise ClientStateError(f"{operation} requires the bank's keys; call hpb() first")
@@ -586,13 +617,15 @@ class Client:
             ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
             CryptoError: the order data could not be decrypted.
             DateRangeMismatchError: a returned entry falls outside ``date_range``.
-            MessageFormatError: the downloaded camt.053 data could not be parsed.
+            MessageFormatError: the downloaded camt.053 data could not be parsed (the
+                download is left un-acknowledged).
         """
-        validate = _dated_range_validator(camt053.parse, date_range) if date_range else None
-        return camt053.parse(
-            self.download(
-                CAMT_053, date_range=date_range, receipt_policy=receipt_policy, validate=validate
-            )
+        return self._download_parsed(
+            CAMT_053,
+            camt053.parse,
+            date_range=date_range,
+            receipt_policy=receipt_policy,
+            check=_entries_in_range_check(date_range) if date_range else None,
         )
 
     def download_intraday_statements(
@@ -624,13 +657,15 @@ class Client:
             ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
             CryptoError: the order data could not be decrypted.
             DateRangeMismatchError: a returned entry falls outside ``date_range``.
-            MessageFormatError: the downloaded camt.052 data could not be parsed.
+            MessageFormatError: the downloaded camt.052 data could not be parsed (the
+                download is left un-acknowledged).
         """
-        validate = _dated_range_validator(camt052.parse, date_range) if date_range else None
-        return camt052.parse(
-            self.download(
-                CAMT_052, date_range=date_range, receipt_policy=receipt_policy, validate=validate
-            )
+        return self._download_parsed(
+            CAMT_052,
+            camt052.parse,
+            date_range=date_range,
+            receipt_policy=receipt_policy,
+            check=_entries_in_range_check(date_range) if date_range else None,
         )
 
     def download_booking_advices(
@@ -664,13 +699,15 @@ class Client:
             ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
             CryptoError: the order data could not be decrypted.
             DateRangeMismatchError: a returned entry falls outside ``date_range``.
-            MessageFormatError: the downloaded camt.054 data could not be parsed.
+            MessageFormatError: the downloaded camt.054 data could not be parsed (the
+                download is left un-acknowledged).
         """
-        validate = _dated_range_validator(camt054.parse, date_range) if date_range else None
-        return camt054.parse(
-            self.download(
-                btf, date_range=date_range, receipt_policy=receipt_policy, validate=validate
-            )
+        return self._download_parsed(
+            btf,
+            camt054.parse,
+            date_range=date_range,
+            receipt_policy=receipt_policy,
+            check=_entries_in_range_check(date_range) if date_range else None,
         )
 
     def download_payment_status_reports(
@@ -702,10 +739,11 @@ class Client:
             ProtocolError: a response could not be parsed.
             ReturnCodeError: the bank reported a non-OK return code (e.g. no data available).
             CryptoError: the order data could not be decrypted.
-            MessageFormatError: the downloaded pain.002 data could not be parsed.
+            MessageFormatError: the downloaded pain.002 data could not be parsed (the
+                download is left un-acknowledged).
         """
-        return pain002.parse(
-            self.download(PAIN_002, date_range=date_range, receipt_policy=receipt_policy)
+        return self._download_parsed(
+            PAIN_002, pain002.parse, date_range=date_range, receipt_policy=receipt_policy
         )
 
     def upload(self, btf: BusinessTransactionFormat, order_data: bytes) -> str:
