@@ -42,6 +42,17 @@ and 1.3.1 were never published.
 
 ### Fixed
 
+- **An upload whose last answer was lost looked safe to repeat.** If the connection failed
+  after the final segment had been sent, `upload()` raised the transport's
+  `TransportError`, marked `TRANSIENT` ("safe to retry"), although the bank may already
+  hold the order. A caller that retried could submit a payment twice. `upload()` now raises
+  `UploadUnconfirmedError` (marked `PERMANENT`, the original error chained) when the final
+  segment was sent without a verified answer: a lost connection, an unverifiable response,
+  or an unknown return code. Check whether the order arrived, for example by its pain.002,
+  before sending it again. A failure before the final segment, and a verified rejection of
+  it, are still raised as before, since the bank then holds no order. Code that catches
+  `TransportError` around `upload()` does not catch the new error, which derives from
+  `EbicsError`.
 - The typed downloads (`download_statements()`, `download_intraday_statements()`,
   `download_booking_advices()`, `download_payment_status_reports()`) parsed the order data
   only after the positive receipt, unless a date range was given. A file the parser

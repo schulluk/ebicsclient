@@ -38,6 +38,7 @@ from ebicsclient.errors import (
     ReturnCodeError,
     TransportError,
     UnknownReturnCodeError,
+    UploadUnconfirmedError,
 )
 from ebicsclient.keys import (
     CertificateUsage,
@@ -181,6 +182,7 @@ __all__ = [
     "TrustAnchorVerifier",
     "UnknownReturnCodeError",
     "UploadPayload",
+    "UploadUnconfirmedError",
     "User",
     "VersionPolicy",
     "__version__",

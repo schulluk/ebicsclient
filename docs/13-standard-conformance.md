@@ -70,13 +70,14 @@ absent, not excluded — unless the **Notes** say otherwise.
 | HAC — customer protocol / acknowledgements (pain.002 form) | Mandated | ❌ | | Machine-readable action log |
 | PTK — customer protocol (textual) | Mandated | ❌ | | Textual counterpart of HAC |
 | HEV — supported EBICS versions (unsecured discovery) | Mandated | ✅ | live | `supported_versions()` returns `EbicsVersion` items. It needs no keys, so it works before INI. The answer is not signed (TLS only). ZKB answers an unknown Host ID with HTTP 404 instead of a return code |
-| Transaction recovery / resumption after an interrupted transfer | Mandated (optional) | ❌ | | An interrupted download restarts, not resumes |
+| Transaction recovery / resumption after an interrupted transfer | Mandated (optional) | ❌ | | An interrupted download restarts, not resumes; an upload whose last answer was lost raises `UploadUnconfirmedError`. ZKB supports recovery (HPD); implementation waits for the spec text |
 
 ## Write — uploads
 
 | Capability | Rule | Support | Verification | Notes |
 |---|---|---|---|---|
 | BTU upload transaction (initialise → transfer) | Mandated | ✅ | live | |
+| ↳ outcome of the final segment: definite only with a verified answer | Mandated | ✅ | spec + tests | The order exists once the exchange returned `000000` (spec 5.1.3.1). Without a verified answer to the last segment, `upload()` raises `UploadUnconfirmedError` instead of a retryable error, so a payment is never sent twice by a retry. Resuming the transaction instead is recovery (see below) |
 | A006 electronic signature (RSASSA-PSS) | Mandated | ✅ | live | Verified by the bank since 2026-10-26 (PUB/HCS/HCA, checked synchronously). Before that the signature had the wrong shape, and BTU acceptance had not exposed it — see the [ledger](12-verification-ledger.md), incident 3 |
 | Order-data encryption to the bank's E002 | Mandated | ✅ | live | |
 | `SignatureFlag` on BTU order params | Mandated | ✅ | live | |

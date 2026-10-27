@@ -26,6 +26,7 @@ from ebicsclient.errors import (
     MessageVersionMismatchError,
     ReturnCodeError,
     UnknownReturnCodeError,
+    UploadUnconfirmedError,
 )
 from ebicsclient.formats import camt052, camt053, camt054, iso20022, pain002
 from ebicsclient.formats.container import extract_documents
@@ -913,14 +914,24 @@ class Client:
             btf: The Business Transaction Format to upload (e.g. ``PAIN_001``).
             order_data: The order data to upload (e.g. a pain.001 document as bytes).
 
+        The bank takes the order once it has the last segment, so only the answer to that
+        segment decides whether the order exists. If the upload fails before it, the bank
+        holds no order and the upload may be repeated. If the last segment was sent but no
+        trustworthy answer came back, :class:`~ebicsclient.errors.UploadUnconfirmedError` is
+        raised: the bank may hold the order, so check before sending it again.
+
         Returns:
             The bank-issued transaction ID for the upload.
 
         Raises:
             ClientStateError: the bank's keys have not been fetched yet (run HPB first).
-            TransportError: a request could not be delivered.
-            ProtocolError: a response could not be parsed.
-            ReturnCodeError: the bank rejected the upload (e.g. a bad signature or order data).
+            TransportError: a request before the final segment could not be delivered (the
+                bank holds no order).
+            ProtocolError: a response before the final segment could not be parsed or
+                verified (the bank holds no order).
+            ReturnCodeError: the bank rejected the upload; it holds no order.
+            UploadUnconfirmedError: the final segment was sent, but its outcome could not be
+                confirmed; the bank may hold the order.
             CryptoError: the order data could not be signed or encrypted.
         """
         if not isinstance(order_data, bytes | bytearray):
@@ -940,20 +951,13 @@ class Client:
         transaction_id = h005.parse_upload_initialisation_response(
             self._post_verified(request, bank_keys)
         )
-
-        segments = payload.order_data_segments
-        for number, segment_data in enumerate(segments, start=1):
-            transfer = h005.build_upload_transfer_request(
-                self._bank,
-                self._keyring,
-                transaction_id,
-                number,
-                segment_data,
-                last_segment=number == len(segments),
-            )
-            h005.parse_upload_transfer_response(self._post_verified(transfer, bank_keys))
+        self._transfer_segments(
+            transaction_id, payload, bank_keys, lambda: UploadUnconfirmedError(transaction_id)
+        )
         logger.info(
-            "Upload: sent %d segment(s) for transaction %s", len(segments), transaction_id
+            "Upload: sent %d segment(s) for transaction %s",
+            payload.num_segments,
+            transaction_id,
         )
         return transaction_id
 
@@ -1029,7 +1033,12 @@ class Client:
         transaction_id = h005.parse_upload_initialisation_response(
             self._post_verified(request, bank_keys)
         )
-        self._transfer_key_change(order_type, transaction_id, payload, bank_keys)
+        self._transfer_segments(
+            transaction_id,
+            payload,
+            bank_keys,
+            lambda: KeyChangeUnconfirmedError(order_type, transaction_id),
+        )
 
         self._keyring = new_keyring
         if certificate_provider is not None:
@@ -1042,9 +1051,15 @@ class Client:
         )
         return transaction_id
 
-    def _transfer_key_change(
-        self, order_type: str, transaction_id: str, payload: UploadPayload, bank_keys: BankKeys
+    def _transfer_segments(
+        self,
+        transaction_id: str,
+        payload: UploadPayload,
+        bank_keys: BankKeys,
+        unconfirmed: Callable[[], EbicsError],
     ) -> None:
+        # Shared by uploads and key changes: ``unconfirmed`` builds the error that says the
+        # final segment was sent without a trustworthy answer.
         segments = payload.order_data_segments
         for number, segment_data in enumerate(segments, start=1):
             last_segment = number == len(segments)
@@ -1057,18 +1072,20 @@ class Client:
                 last_segment=last_segment,
             )
             if not last_segment:
-                # The bank processes the order only once it has the last segment, so a
-                # failure here leaves the old keys in force: let it propagate as is.
+                # The bank takes the order only once it has the last segment, so a failure
+                # here leaves no order behind (and, for a key change, the old keys in force):
+                # let it propagate as is.
                 h005.parse_upload_transfer_response(self._post_verified(transfer, bank_keys))
                 continue
-            # The bank processes the change before answering the final segment (spec 4.3),
-            # so that answer is authoritative: a verified rejection means the old keys stay.
-            # Anything short of a verified answer leaves the outcome open.
+            # The answer to the final segment is authoritative: an order is processed only
+            # after the exchange returned 000000 (spec 5.1.3.1), and a key change is processed
+            # before that answer (spec 4.3). A verified rejection therefore means no order
+            # and no key change; anything short of a verified answer leaves the outcome open.
             try:
                 h005.parse_upload_transfer_response(self._post_verified(transfer, bank_keys))
             except UnknownReturnCodeError as error:
-                raise KeyChangeUnconfirmedError(order_type, transaction_id) from error
+                raise unconfirmed() from error
             except ReturnCodeError:
                 raise
             except EbicsError as error:
-                raise KeyChangeUnconfirmedError(order_type, transaction_id) from error
+                raise unconfirmed() from error

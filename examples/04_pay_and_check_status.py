@@ -10,6 +10,10 @@ the group and per-transaction results.
 
 Run ``pay`` first, give the bank a little time to process, then run ``status``.
 
+If ``pay`` loses the bank's answer to the last part of the upload, the bank may hold the
+payment or not, and ``pay`` says so instead of failing as if nothing had been sent. Run
+``status`` before submitting the file again: sending it twice could pay twice.
+
     uv run python examples/04_pay_and_check_status.py pay path/to/payment.xml
     # ... wait for the bank to process it ...
     uv run python examples/04_pay_and_check_status.py status
@@ -19,7 +23,7 @@ import argparse
 from collections.abc import Iterable
 from pathlib import Path
 
-from ebicsclient import StatusReason
+from ebicsclient import StatusReason, UploadUnconfirmedError
 from ebicsclient.models import PAIN_001
 
 from _config import load_environment, online_client
@@ -29,7 +33,13 @@ def pay(pain001_path: Path) -> int:
     """Upload a pain.001 credit-transfer file and report the transaction ID."""
     order_data = pain001_path.read_bytes()
     client = online_client()
-    transaction_id = client.upload(PAIN_001, order_data)
+    try:
+        transaction_id = client.upload(PAIN_001, order_data)
+    except UploadUnconfirmedError as error:
+        print(f"Transaction {error.transaction_id}: the answer to the last segment was lost.")
+        print("The bank may have the payment. Do NOT submit the file again yet: run the")
+        print("'status' step in a few minutes and look for a pain.002 answering this file.")
+        return 1
     print(
         f"Submitted {pain001_path.name} ({len(order_data)} bytes) — transaction {transaction_id}."
     )

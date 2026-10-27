@@ -3,6 +3,7 @@
 import datetime
 import io
 import logging
+import os
 import zipfile
 from decimal import Decimal
 from pathlib import Path
@@ -29,8 +30,10 @@ from ebicsclient.errors import (
     MessageFormatError,
     MessageVersionMismatchError,
     ResponseAuthenticationError,
+    Retryability,
     ReturnCodeError,
     TransportError,
+    UploadUnconfirmedError,
 )
 from ebicsclient.formats import container
 from ebicsclient.keys import CertificateUsage
@@ -712,6 +715,75 @@ def test_upload_raises_when_the_bank_rejects_the_signature(
     with pytest.raises(ReturnCodeError) as caught:
         client.upload(PAIN_001, b"<Document/>")
     assert caught.value.code == "091002"
+
+
+@pytest.mark.parametrize("final_response", ["lost", "unsigned", "unknown-code"])
+def test_upload_reports_an_unconfirmed_outcome_after_the_final_segment(
+    final_response: str, keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    final: bytes | Exception
+    if final_response == "lost":
+        final = TransportError("timed out", retryability=Retryability.TRANSIENT)
+    elif final_response == "unsigned":
+        final = (
+            f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static/>'
+            "<mutable><ReturnCode>000000</ReturnCode></mutable></header>"
+            "<body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
+        ).encode()
+    else:
+        final = _transfer_response("099999", bank_keyring)
+    responses = [_upload_response("Initialisation", bank_keyring, transaction_id="E" * 32), final]
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(UploadUnconfirmedError) as caught:
+        client.upload(PAIN_001, b"<Document>pay</Document>")
+    assert caught.value.transaction_id == "E" * 32
+    assert caught.value.__cause__ is not None
+    # A transient cause must not make the upload look safe to repeat: the bank may hold it.
+    assert caught.value.retryability is Retryability.PERMANENT
+    assert len(transport.posts) == 2
+
+
+def test_upload_reports_a_rejected_final_segment_as_definite(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # 090004 EBICS_INVALID_ORDER_DATA_FORMAT: a verified rejection, so the bank holds no order.
+    responses = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        _transfer_response("090004", bank_keyring),
+    ]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(ReturnCodeError) as caught:
+        client.upload(PAIN_001, b"<Document>pay</Document>")
+    assert caught.value.code == "090004"
+
+
+def test_upload_failure_before_the_final_segment_is_definite(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # Incompressible data beyond one segment's 1 MB of base64 text: two segments. The bank
+    # takes the order only with the last one, so losing the first leaves no order behind.
+    order_data = os.urandom(800_000)
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        TransportError("connection reset", retryability=Retryability.TRANSIENT),
+    ]
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(TransportError):
+        client.upload(PAIN_001, order_data)
+    first_transfer = etree.fromstring(transport.posts[1])
+    segment = first_transfer.find(f".//{{{_NS}}}SegmentNumber")
+    assert segment is not None
+    assert (segment.text, segment.get("lastSegment")) == ("1", "false")
+
+
+def test_upload_failure_in_the_initialisation_is_definite(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # The order data travels only in the transfer phase.
+    responses: list[bytes | Exception] = [TransportError("connection reset")]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(TransportError):
+        client.upload(PAIN_001, b"<Document>pay</Document>")
 
 
 def test_download_raises_when_the_bank_reports_an_error(
