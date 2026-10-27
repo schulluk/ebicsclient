@@ -41,6 +41,7 @@ from ebicsclient.models import (
     BusinessTransactionFormat,
     CustomerInfo,
     DateRange,
+    EbicsVersion,
     Entry,
     InitializationState,
     Keyring,
@@ -56,7 +57,7 @@ from ebicsclient.models import (
     User,
     VersionPolicy,
 )
-from ebicsclient.protocol import h005
+from ebicsclient.protocol import h005, hev
 from ebicsclient.transport import Transport
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,26 @@ class Client:
     def keyring(self) -> Keyring:
         """The subscriber's current key pairs (the successor's after a :meth:`change_keys`)."""
         return self._keyring
+
+    def supported_versions(self) -> list[EbicsVersion]:
+        """Ask the bank which EBICS versions it supports (HEV).
+
+        HEV names only the bank's host: it needs no keys and no subscriber, so it works
+        before INI and HIA, for example to check that a bank offers EBICS 3.0 (``H005``),
+        the only version this client speaks. The bank's answer is not signed, so it is only
+        as trustworthy as the TLS connection; don't base a security decision on it.
+
+        Returns:
+            The versions the bank reports, in its order (empty if it reports none).
+
+        Raises:
+            TransportError: the request could not be delivered. Some banks answer an
+                unknown Host ID with an HTTP error rather than a return code.
+            ProtocolError: the response is not a readable HEV response.
+            ReturnCodeError: the bank reported a non-OK return code.
+        """
+        logger.info("HEV: asking host %s for its supported EBICS versions", self._bank.host_id)
+        return hev.parse_response(self._transport.post(hev.build_request(self._bank)))
 
     def make_ini_letter(
         self,

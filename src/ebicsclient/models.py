@@ -952,6 +952,20 @@ class BankParameters:
     supports_downloadable_order_data: bool
 
 
+@dataclass(frozen=True, slots=True)
+class EbicsVersion:
+    """One EBICS version a bank supports, as its HEV answer reports it (``VersionNumber``).
+
+    Attributes:
+        protocol_version: The protocol schema version (``@ProtocolVersion``), ``H`` and
+            three digits, e.g. ``"H005"`` for EBICS 3.0.
+        release: The EBICS release, two digits, a dot and two digits, e.g. ``"03.00"``.
+    """
+
+    protocol_version: str
+    release: str
+
+
 class KeyRotation(StrEnum):
     """Which of the subscriber's keys a key change replaces at the bank.
 

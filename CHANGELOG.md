@@ -25,6 +25,11 @@ and 1.3.1 were never published.
   camt.054 parsers fill it for message versions 04 and 08. It was validated live against
   the ZKB test platform, except for a party that is a bank and an account without an IBAN,
   which are checked against the ISO 20022 schema only.
+- `Client.supported_versions()` (HEV) asks the bank which EBICS versions it supports and
+  returns them as `EbicsVersion` items (protocol version and release, such as `H005`
+  and `03.00`). It needs no keys, so it works before INI and HIA, for example to check
+  that a bank offers EBICS 3.0. The bank does not sign this answer. Validated live
+  against the ZKB test platform.
 - Python 3.15 is now supported and tested in CI, like 3.11 to 3.14.
 
 ### Fixed

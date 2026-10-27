@@ -187,7 +187,8 @@ Two tiers:
   - **Canonicalization (the #1 failure point):** golden vectors derived from the C14N spec, plus
     cross-implementation parity against `ebics-client-php` (**without copying its code**, doc 02) and
     schema validation. The mandated algorithm is inclusive Canonical XML 1.0 (`REC-xml-c14n-20010315`).
-  - **Structure:** validate INI/HIA/HPB envelopes and order data against the H005 XSDs.
+  - **Structure:** validate INI/HIA/HPB envelopes and order data against the H005 XSDs, and the
+    HEV request against `ebics_hev.xsd`.
   - camt parsing: a sanitized real `camt.053.001.08` sample as a fixture.
 - **Integration (local-only, opt-in, never in CI).** Hits the **ZKB test platform** (testplattform.zkb.ch).
   - Marked `@pytest.mark.integration`, **excluded by default** (`-m "not integration"`); run with `-m integration`.

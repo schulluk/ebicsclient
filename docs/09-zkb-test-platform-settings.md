@@ -85,6 +85,7 @@ These are the entries our camt.053 parser will encounter in the downloaded state
 
 | Capability | Platform setting | Our code | Status |
 | --- | --- | --- | --- |
+| Supported versions (HEV) | — | `client.supported_versions()` | ✅ live (H002 to H005, as in HPD) |
 | Handshake (INI/HIA/HPB) | mit Schlüsseln profile | `client.ini/hia/hpb` | ✅ verified end to end |
 | End-of-day statement download | camt.053 enabled, camt.053.001.08 | `client.download(CAMT_053)` / `download_statements()` | ✅ live (balances reconcile) |
 | camt.053 parsing (balances, entries) | Standard-Buchungen | `formats/camt053.py` | ✅ live |

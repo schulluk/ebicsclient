@@ -28,7 +28,7 @@ from ebicsclient.models import (
     KeyRotation,
     User,
 )
-from ebicsclient.protocol import h005
+from ebicsclient.protocol import h005, hev
 
 _SCHEMA_DIR = Path(__file__).parent / "schema" / "H005"
 _NS = h005.NAMESPACE
@@ -220,3 +220,23 @@ def test_admin_order_data_fixtures_validate(fixture: str) -> None:
     # hand-written account example especially, which has no live counterpart.
     document = etree.parse(str(Path(__file__).parent / "data" / fixture))
     _assert_valid(_schema("ebics_orders_H005.xsd"), document.getroot())
+
+
+_HEV_SCHEMA = Path(__file__).parent / "schema" / "H000" / "ebics_hev.xsd"
+_HEV_SCHEMA_ABSENT = pytest.mark.skipif(
+    not _HEV_SCHEMA.is_file(),
+    reason="HEV schema absent — run `python tools/fetch-schemas.py` to enable schema validation",
+)
+
+
+@_HEV_SCHEMA_ABSENT
+def test_hev_request_validates(bank: Bank) -> None:
+    schema = etree.XMLSchema(etree.parse(str(_HEV_SCHEMA)))
+    _assert_valid(schema, etree.fromstring(hev.build_request(bank)))
+
+
+@_HEV_SCHEMA_ABSENT
+def test_hev_response_fixture_validates() -> None:
+    schema = etree.XMLSchema(etree.parse(str(_HEV_SCHEMA)))
+    document = etree.parse(str(Path(__file__).parent / "data" / "hev_zkb_sample.xml"))
+    _assert_valid(schema, document.getroot())

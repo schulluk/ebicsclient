@@ -69,7 +69,7 @@ absent, not excluded — unless the **Notes** say otherwise.
 | HPD — bank parameters (versions, optional features) | Mandated | ✅ | live | `bank_parameters()` |
 | HAC — customer protocol / acknowledgements (pain.002 form) | Mandated | ❌ | | Machine-readable action log |
 | PTK — customer protocol (textual) | Mandated | ❌ | | Textual counterpart of HAC |
-| HEV — supported EBICS versions (unsecured discovery) | Mandated | ❌ | | Pre-init version probe |
+| HEV — supported EBICS versions (unsecured discovery) | Mandated | ✅ | live | `supported_versions()` returns `EbicsVersion` items. It needs no keys, so it works before INI. The answer is not signed (TLS only). ZKB answers an unknown Host ID with HTTP 404 instead of a return code |
 | Transaction recovery / resumption after an interrupted transfer | Mandated (optional) | ❌ | | An interrupted download restarts, not resumes |
 
 ## Write — uploads

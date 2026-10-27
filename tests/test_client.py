@@ -41,6 +41,7 @@ from ebicsclient.models import (
     BankKeys,
     BusinessTransactionFormat,
     DateRange,
+    EbicsVersion,
     InitializationState,
     Keyring,
     KeyRotation,
@@ -823,6 +824,18 @@ def test_bank_parameters_runs_the_hpd_admin_download(
     assert "H005" in client.bank_parameters().protocol_versions
     opened = etree.fromstring(transport.posts[0])
     assert opened.findtext(f".//{{{_NS}}}AdminOrderType") == "HPD"
+
+
+def test_supported_versions_needs_no_bank_keys(keyring: Keyring) -> None:
+    # HEV runs before HPB (and before INI/HIA): the client sends it without the bank's keys.
+    response = (Path(__file__).parent / "data" / "hev_zkb_sample.xml").read_bytes()
+    client, transport = _client(response, keyring)
+    versions = client.supported_versions()
+    assert EbicsVersion(protocol_version="H005", release="03.00") in versions
+    assert transport.posted is not None
+    request = etree.fromstring(transport.posted)
+    assert request.tag == "{http://www.ebics.org/H000}ebicsHEVRequest"
+    assert request.findtext("{http://www.ebics.org/H000}HostID") == "HOST"
 
 
 @pytest.mark.parametrize("method", ["customer_info", "bank_parameters"])

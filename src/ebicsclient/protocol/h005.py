@@ -1335,11 +1335,28 @@ def _check_return_codes(root: etree._Element, success_codes: frozenset[str]) -> 
             continue
         parent = return_code.getparent()
         report = parent.find(f"{{{NAMESPACE}}}ReportText") if parent is not None else None
-        report_text = report.text if report is not None else None
-        known_name = _KNOWN_RETURN_CODES.get(code)
-        if known_name is None:
-            raise UnknownReturnCodeError(code, report_text)
-        raise ReturnCodeError(code, report_text if report_text is not None else known_name)
+        raise return_code_error(code, report.text if report is not None else None)
+
+
+def return_code_error(code: str, report_text: str | None) -> ReturnCodeError:
+    """Build the error to raise for a non-success EBICS return code.
+
+    The return codes (Annex 1) are shared by every EBICS exchange, HEV included, so this is
+    the one place that decides how a code is reported.
+
+    Args:
+        code: The six-digit return code.
+        report_text: The bank's report text, or ``None`` if it sent none.
+
+    Returns:
+        A ``ReturnCodeError`` for a code in the client's verified table (carrying the bank's
+        text, or the code's name when there is none). For any other code an
+        ``UnknownReturnCodeError``: still a failure, but labelled unverified.
+    """
+    known_name = _KNOWN_RETURN_CODES.get(code)
+    if known_name is None:
+        return UnknownReturnCodeError(code, report_text)
+    return ReturnCodeError(code, report_text if report_text is not None else known_name)
 
 
 def _child(parent: etree._Element, local_name: str) -> etree._Element:
