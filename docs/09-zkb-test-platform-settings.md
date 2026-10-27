@@ -6,7 +6,7 @@ generates, which booking types appear in the camt statements, and which reportin
 (camt.052/053/054) are produced. This document records the settings we run against so the mapping
 to our implementation is explicit, and tracks which of them we have actually verified end to end.
 
-It reflects the platform configuration captured on **2026-07-04**. The page has a **Speichern**
+It reflects the platform configuration as of **2026-10-28** (first captured 2026-07-04). The page has a **Speichern**
 (save) / **Zurücksetzen** (reset) control, so these values can change — re-check the platform if a
 test behaves unexpectedly.
 
@@ -31,19 +31,20 @@ The channel governs how the **pain.002 status message** is delivered back.
 | Validation against (Validierung gegen) | **pain.001.001.09.ch.03 — SPS 2025** (alt: pain.001.001.03.ch.02 — SPS 2021) |
 | Simulation to (Simulation nach) | **camt.05x.001.08 — SPS 2025** (alt: camt.05x.001.04 — SPS 2021) |
 
-The simulation emits **camt.053.001.08**, which matches our download BTF
-(`EOP / CH / camt.053 / 08 / ZIP`, `models.CAMT_053`). Uploads (M3) target
+After a pain.001 upload the simulation emits **camt.053.001.08**, which matches our download BTF
+(`EOP / CH / camt.053 / 08 / ZIP`, `models.CAMT_053`). Credits simulated from a CSV uploaded
+over EBICS come back as version 04 regardless (see the simulation section). Uploads (M3) target
 **pain.001.001.09.ch.03**.
 
 ### pain.002 (Überweisung)
 
 | Setting | Value |
 | --- | --- |
-| Technical pain.002 message (technische pain.002-Meldung) | ❌ off |
+| Technical pain.002 message (technische pain.002-Meldung) | ✅ on (shown as given on the Datalink EBICS channel) |
 | pain.002 validation message (pain.002-Validierungsmeldung) | ✅ on |
 | Simulate a reject for every third transaction (Für jede dritte Transaktion einen Reject erzeugen) | ✅ (set 2026-07-04) |
 
-So an upload returns a **pain.002 validation message**, and **every third transaction is rejected**
+So an upload returns a technical pain.002 and a **pain.002 validation message**, and **every third transaction is rejected**
 in the simulation — which lets M3 exercise both the accepted and the rejected pain.002 paths.
 
 ### Simulated booking details in the camt messages
@@ -58,7 +59,7 @@ in the simulation — which lets M3 exercise both the accepted and the rejected 
 - ATM withdrawal (Bancomatbezug)
 - Payment return (Zahlungsretoure)
 
-**Other (Sonstige) — ⬜ disabled:** FX buy/sell, securities buy/sell, securities coupon credit,
+**Other (Sonstige) — ✅ enabled:** FX buy/sell, securities buy/sell, securities coupon credit,
 credit-card credit.
 
 These are the entries our camt.053 parser will encounter in the downloaded statement.
@@ -67,19 +68,21 @@ These are the entries our camt.053 parser will encounter in the downloaded state
 
 | Message | Enabled | Notes |
 | --- | --- | --- |
-| Intraday statement (camt.052) | ⬜ | with none of the collective-detail options |
-| **End-of-day statement (camt.053)** | ✅ | **our download target**; collective-booking detail options all off |
-| Booking advice credits (camt.054) | ⬜ | |
-| Booking advice debits (camt.054) | ⬜ | |
+| Intraday statement (camt.052) | ✅ | transaction details for all four kinds of collective booking (payments excluding salaries, QRR, SCOR, LSV) |
+| **End-of-day statement (camt.053)** | ✅ | **our download target**; the same four collective-detail options on |
+| Booking advice credits (camt.054) | ✅ | details for single bookings, none for collective orders |
+| Booking advice debits (camt.054) | ✅ | details for single bookings, none for collective orders |
 | QR collective resolutions, credits (camt.054 QRR) | ✅ | delivered as a separate camt.054 |
 | SCOR collective resolutions, credits (camt.054 SCOR) | ✅ | delivered as a separate camt.054 |
 | LSV collective resolutions, credits (camt.054 LSV) | ✅ | delivered as a separate camt.054 |
-| Collective resolutions, payment orders (camt.054) | ⬜ | |
+| Collective resolutions, payment orders (camt.054) | ✅ | delivered as a separate camt.054 |
+
+The page sets no camt version per message: *Simulation nach* above is the only version setting.
 
 ### QR-Rechnung (QR-bill collection)
 
-- Additional collection on the first six digits of the QR reference (QRR): ⬜ off
-- Additional collection on positions 5–10 of the SCOR reference: ⬜ off
+- Additional collection on the first six digits of the QR reference (QRR): ✅ on
+- Additional collection on positions 5–10 of the SCOR reference: ✅ on
 
 ## Mapping to our implementation, and verification status
 
@@ -89,7 +92,7 @@ These are the entries our camt.053 parser will encounter in the downloaded state
 | Handshake (INI/HIA/HPB) | mit Schlüsseln profile | `client.ini/hia/hpb` | ✅ verified end to end |
 | End-of-day statement download | camt.053 enabled, camt.053.001.08 | `client.download(CAMT_053)` / `download_statements()` | ✅ live (balances reconcile) |
 | camt.053 parsing (balances, entries) | Standard-Buchungen | `formats/camt053.py` | ✅ live |
-| Intraday statement (camt.052) | produced since at least 2026-10-26 (the table above predates it) | `download_intraday_statements()` | ✅ live |
+| Intraday statement (camt.052) | camt.052 enabled | `download_intraday_statements()` | ✅ live |
 | Booking advices (camt.054 incl. QRR/SCOR/LSV) | QRR/SCOR/LSV collective resolutions enabled | `download_booking_advices(btf)` | ✅ live; see the simulation section below |
 | Single transactions of a booking (references, payer, remittance text) | QRR/SCOR/LSV collective resolutions enabled | `Entry.transactions` | ✅ live (version 04 from simulated credits, version 08 from a pain.001 batch debit) |
 | pain.001 upload | pain.001.001.09.ch.03 | `client.upload(PAIN_001, …)` | ✅ live (processed since the A006 fix) |
@@ -132,7 +135,19 @@ Three platform behaviours to know:
   the same day produced version 08 and the settings above say camt.05x.001.08. HAA listed
   only the version-04 BTFs. Version 08 of `XQRR`/`XSCR`/`XDDD` is therefore not yet
   validated with data; the bank does accept those tuples (`090005`, while an unregistered
-  option is refused with `091005`).
+  option is refused with `091005`). A further run on 2026-10-27 again produced only version
+  04, and the three version-08 tuples stayed at `090005` before and after it. The settings,
+  checked on 2026-10-28, say Datalink EBICS and camt.05x.001.08. So credits simulated from a
+  CSV uploaded over EBICS do not follow *Simulation nach*, while pain.001 uploads do.
+  The same CSV uploaded through the web form on 2026-10-28 (*Dateityp* "Zahlungseingang
+  (csv)", *Simulation nach* 08) came back in version 08: camt.052, camt.053 and every
+  camt.054, including the QRR, SCOR and LSV+ collective resolutions. The tool's
+  reconciliation, fed with those documents, found all eight payments with exactly the
+  reference, reference type, amount, payer and remittance text sent. That result stays in the
+  web download, though: nothing reached the EBICS queue (HAA empty, the three version-08
+  tuples still `090005`). So the version-08 documents of these variants are read correctly,
+  but their delivery over EBICS in version 08 remains unverified. The web list of uploaded
+  files also shows each EBICS upload, with its own result archive.
 - **Each collective-resolution ZIP held its document twice** (byte-identical, same
   notification ID), while the `XTD` archive held one copy. The parser returns what the bank
   sent, so a caller summing camt.054 amounts must de-duplicate by notification ID.
@@ -289,5 +304,8 @@ rightly, as the 2026-10-26 correction above shows.
    2026-10-26: the cause was the client's A006 signature, not the platform (see above).
 2. ~~camt.054 booking advices~~ — parsed live since 2026-10-26 (see the simulation section),
    with the single transactions of each collective booking (`Entry.transactions`). Still
-   open: why the simulated credits arrive as camt version 04 (check *Simulation nach* on the
-   Defaultwerte page).
+   open: credits simulated over EBICS arrive as camt version 04 although *Simulation nach*
+   says camt.05x.001.08 (checked 2026-10-28), so version 08 of `XQRR`/`XSCR`/`XDDD` has not
+   been delivered over EBICS yet. The web upload produces version 08 but does not deliver
+   it over EBICS. Next: ask ZKB support, or retry after the 2009 versions are switched off on
+   21 Nov 2026.
