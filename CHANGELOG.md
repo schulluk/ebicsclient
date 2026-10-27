@@ -52,6 +52,12 @@ and 1.3.1 were never published.
   again then needs a new initialisation with new keys. Validated live against the ZKB test
   platform: the subscriber was suspended at once, and INI and HIA with new keys brought it
   back.
+- `Client.customer_acknowledgement()` downloads HAC, the bank's log of the customer's EBICS
+  actions since the last download, as a `CustomerAcknowledgement`. Each
+  `AcknowledgementEntry` gives the type of action (`AcknowledgementAction`), the ISO reason
+  code, the order, its BTF and the timestamp, so it shows, for example, whether the bank
+  verified an order's signature. The log is parsed before the receipt; `ReceiptPolicy.KEEP`
+  leaves it at the bank. Validated live against the ZKB test platform.
 - Python 3.15 is now supported and tested in CI, like 3.11 to 3.14.
 
 ### Changed

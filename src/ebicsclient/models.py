@@ -709,6 +709,108 @@ class PaymentStatusReport:
         )
 
 
+class AcknowledgementAction(StrEnum):
+    """The type of action one customer-acknowledgement entry records (EBICS 3.0 spec 10.2.3.1).
+
+    The bank writes it into ``OrgnlPmtInfId``. The three ``ORDER_FINAL`` values are labels,
+    not actions: they mark that no further entry follows for the order, and carry no reason
+    code. EBICS 3.0.2 has a positive and a negative label; banks on an earlier version send
+    the neutral ``ORDER_HAC_FINAL``, which the spec text still names (spec 10.2.3.3, 10.4).
+    """
+
+    FILE_UPLOAD = "FILE_UPLOAD"
+    FILE_DOWNLOAD = "FILE_DOWNLOAD"
+    SIGNATURE_UPLOAD = "ES_UPLOAD"
+    SIGNATURE_DOWNLOAD = "ES_DOWNLOAD"
+    SIGNATURE_VERIFICATION = "ES_VERIFICATION"
+    DISTRIBUTED_SIGNATURE_FORWARDING = "VEU_FORWARDING"
+    DISTRIBUTED_SIGNATURE_VERIFICATION = "VEU_VERIFICATION"
+    DISTRIBUTED_SIGNATURE_VERIFICATION_END = "VEU_VERIFICATION_END"
+    DISTRIBUTED_SIGNATURE_CANCELLATION = "VEU_CANCEL_ORDER"
+    ADDITIONAL_INFORMATION = "ADDITIONAL"
+    ORDER_FINAL = "ORDER_HAC_FINAL"
+    ORDER_FINAL_POSITIVE = "ORDER_HAC_FINAL_POS"
+    ORDER_FINAL_NEGATIVE = "ORDER_HAC_FINAL_NEG"
+
+
+@dataclass(frozen=True, slots=True)
+class AcknowledgementEntry:
+    """One protocol step in a customer acknowledgement (one ``OrgnlPmtInfAndSts``, spec 10.2.3).
+
+    The identifiers come from ``StsRsnInf/Orgtr/Id/OrgId/Othr``, where ``SchmeNm/Prtry`` names
+    each one (spec 10.2.3.2). The bank provides those it has, so any of them may be ``None``.
+
+    Attributes:
+        action: The type of action.
+        reason_code: The result of the action, an ISO ``ExternalStatusReason1Code`` (e.g.
+            ``"TS01"`` transmission successful, ``"DS01"`` signatures correct, ``"TD01"`` no
+            data available; spec 10.3). ``None`` for the final labels, where the spec forbids
+            one, and when an ``ADDITIONAL`` entry carries none.
+        timestamp: When the action happened (``TimeStamp``), or ``None``.
+        customer_name: The customer's name (``Orgtr/Nm``), or ``None``.
+        partner_id: The customer's Partner ID (``PartnerID``), or ``None``.
+        user_id: The subscriber who acted (``UserID``), or ``None``.
+        system_id: The technical subscriber who acted (``SystemID``), or ``None``.
+        order_id: The order number (``OrderID``), or ``None``.
+        admin_order_type: The administrative order type (``AdminOrderType``, e.g. ``"BTU"``),
+            or ``None``.
+        service: The BTF of the order (``ServiceName``, ``Scope``, ``ServiceOption``,
+            ``ContainerType``, ``MsgName``, and ``MsgNameVersion`` for its version), or
+            ``None`` if the entry names none.
+        referenced_order_id: The order an action on another order refers to (``OrderIDRef``),
+            or ``None``.
+        referenced_admin_order_type: That order's administrative order type
+            (``AdminOrderTypeRef``), or ``None``.
+        referenced_service: That order's BTF (the ``…Ref`` service identifiers), or ``None``.
+        referenced_partner_id: That order's Partner ID, when it is another customer's
+            (``PartnerIDRef``), or ``None``.
+        data_digest: The hash value of the order data (``DataDigest``), or ``None``.
+        additional_information: The free-text lines (``AddtlInf``), in order: notes, the
+            order's ``AdditionalOrderInfo``, or a display of the file's content.
+        other_identifiers: Identifiers under a scheme name the spec does not list, as
+            ``(scheme name, value)`` pairs in document order, so none is dropped.
+    """
+
+    action: AcknowledgementAction
+    reason_code: str | None
+    timestamp: datetime.datetime | None
+    customer_name: str | None
+    partner_id: str | None
+    user_id: str | None
+    system_id: str | None
+    order_id: str | None
+    admin_order_type: str | None
+    service: BusinessTransactionFormat | None
+    referenced_order_id: str | None
+    referenced_admin_order_type: str | None
+    referenced_service: BusinessTransactionFormat | None
+    referenced_partner_id: str | None
+    data_digest: str | None
+    additional_information: tuple[str, ...]
+    other_identifiers: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerAcknowledgement:
+    """The bank's log of the EBICS actions of a customer (HAC, EBICS 3.0 spec 10).
+
+    A HAC holds every action and its result since the previous HAC download, for all
+    subscribers of the Partner ID: uploads, downloads, signature checks, and when each order
+    was finished at EBICS level. It is a pain.002 document filled by the rules of spec 10.2.
+
+    Attributes:
+        identification: The message ID (``GrpHdr/MsgId``).
+        created_at: When the bank created it (``GrpHdr/CreDtTm``).
+        host_id: The bank's Host ID (``GrpHdr/InitgPty``).
+        entries: The protocol steps, in document order.
+    """
+
+    identification: str
+    created_at: datetime.datetime
+    host_id: str
+    entries: tuple[AcknowledgementEntry, ...]
+
+
 class AuthorisationLevel(StrEnum):
     """The signature class a subscriber holds for an order type (``AuthorisationLevelType``).
 

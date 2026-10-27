@@ -46,8 +46,11 @@ certificates ("mit Zertifikaten"); profile **T** (no distributed signature neede
 ## Order types vs BTF (the EBICS 3.0 change)
 
 In 3.0, *business* transactions are identified by **BTF (Business Transaction Format)** descriptors
-instead of the old 3-letter order types. **Key-management** order types stay classic:
-`INI`, `HIA`, `HPB`, `HCA`, `HCS`, `PUB`, `SPR`, `HPD`, `HKD`, `HTD`, `PTK`.
+instead of the old 3-letter order types. **Administrative** order types stay classic (spec 13):
+key management (`INI`, `HIA`, `H3K`, `HPB`, `HCA`, `HCS`, `PUB`, `SPR`), the information
+downloads `HAA`, `HAC`, `HEV`, `HKD`, `HPD`, `HTD`, and the distributed-signature order types
+`HVD`, `HVE`, `HVS`, `HVT`, `HVU`, `HVZ`. `PTK`, the textual customer protocol of EBICS 2.x, is
+not part of EBICS 3.0 (spec 3.0.2, change notes); `HAC` replaces it.
 
 The one BTF we need (statement download):
 

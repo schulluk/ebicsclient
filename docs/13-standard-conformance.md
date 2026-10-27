@@ -67,8 +67,7 @@ absent, not excluded — unless the **Notes** say otherwise.
 | HTD — *this subscriber's* data & permissions | Mandated | ✅ | live | |
 | HKD — *customer + all subscribers'* data | Mandated | ✅ | live | `customer_info()`; accounts and account-bound permissions are XSD-only (the test subscriber has none) |
 | HPD — bank parameters (versions, optional features) | Mandated | ✅ | live | `bank_parameters()` |
-| HAC — customer protocol / acknowledgements (pain.002 form) | Mandated | ❌ | | Machine-readable action log |
-| PTK — customer protocol (textual) | Mandated | ❌ | | Textual counterpart of HAC |
+| HAC — customer acknowledgement, the bank's log of EBICS actions (pain.002 form) | Mandated | ✅ | live | `customer_acknowledgement()` returns a `CustomerAcknowledgement`: one entry per protocol step, with the type of action, the ISO reason code, the order, its BTF and the timestamp (spec 10). Parsed before the receipt; `ACKNOWLEDGE` marks the log fetched, `KEEP` leaves it. Read live from ZKB, which logs the verification of each order's signature (`DS01`, or a rejection such as `TD03`) |
 | HEV — supported EBICS versions (unsecured discovery) | Mandated | ✅ | live | `supported_versions()` returns `EbicsVersion` items. It needs no keys, so it works before INI. The answer is not signed (TLS only). ZKB answers an unknown Host ID with HTTP 404 instead of a return code |
 | Transaction recovery / resumption after an interrupted transfer | Mandated (optional) | ✅ | live | A step whose answer was lost is sent again in the same transaction, and a recovery point the bank names (`EBICS_TX_RECOVERY_SYNC`) is followed; `Client(recovery_attempts=…)`, default 2, `0` turns it off. Live on ZKB for uploads, including a lost answer to the final segment (confirmed, booked once). Multi-segment download recovery is tested offline only, because ZKB's test downloads fit one segment. The initialisation is not recovered (no transaction ID yet; nothing is consumed or ordered by it). A positive receipt whose answer stays lost still raises: ZKB answers a resent receipt with `EBICS_TX_UNKNOWN_TXID`, so the data may be consumed although the call failed |
 
@@ -84,9 +83,9 @@ absent, not excluded — unless the **Notes** say otherwise.
 | Arbitrary business upload via a custom BTF | Mandated | ✅ | live | Any `BusinessTransactionFormat` |
 | pain.001 credit transfer submission | Mandated (ISO) | ✅ | live | |
 | ↳ in the original ISO schema (CGI), BTF `MCT / CGI / XCH` | Mandated (ISO) | ✅ | live | `PAIN_001_CGI`. Processed by the ZKB test platform for SEPA payments; it rejects foreign-currency payments in this schema |
-| ↳ through the SEPA BTF `SCT` | Mandated (ISO) | 🟡 | HTD + XSD | Experimental: `ebicsclient.experimental.PAIN_001_SEPA`. The ZKB test platform accepts such uploads with `000000` but never processes them, so they cannot be validated there. At ZKB, SEPA payments go through `PAIN_001` or `PAIN_001_CGI` |
+| ↳ through the SEPA BTF `SCT` | Mandated (ISO) | 🟡 | HTD + XSD | Experimental: `ebicsclient.experimental.PAIN_001_SEPA`. The ZKB test platform accepts such uploads with `000000`, then rejects the file in its signature check with `TD03` "file format incomplete or invalid" (seen in HAC) and never processes it, so the BTF cannot be validated there. At ZKB, SEPA payments go through `PAIN_001` or `PAIN_001_CGI` |
 | pain.008 direct-debit submission | Mandated (ISO) | 🟡 | | Works via a custom BTF; no typed helper |
-| Pre-validation before submission — `PreValidation` (account authorisations / amounts) | Mandated (optional) | ❌ | | Optional bank pre-check sent with the order; not implemented |
+| Pre-validation before submission — `PreValidation` (account authorisations / amounts) | Mandated (optional) | ❌ | | Optional bank pre-check sent with the order; not implemented. The ZKB test platform does not offer it (HPD `PreValidation supported="false"`), so it cannot be validated there |
 | Generic order parameters + `AdditionalOrderInfo` (free-text note ≤255 chars) | Mandated (optional) | ❌ | | Bank-specific Name/Value params and an unstructured order note; not exposed |
 
 ## Distributed electronic signatures (EDS / VEU) — multi-person approval

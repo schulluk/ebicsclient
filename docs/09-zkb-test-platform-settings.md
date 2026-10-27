@@ -166,7 +166,9 @@ the CGI schema as payment type X, so the platform is stricter than the handbook 
 
 So the `SCT` channel cannot be validated on this platform, and an unregistered tuple
 (`SCT / GLB`) is not refused either: here too, `000000` on an upload says nothing about
-processing.
+processing. The customer acknowledgement (HAC, below) names the reason: under both `SCT`
+tuples the bank's signature check ended in `TD03` IncorrectFileStructure, so the same file the
+`MCT` channels accepted counts as malformed on the `SCT` channel.
 
 ## Recovery (2026-10-27)
 
@@ -202,6 +204,24 @@ handbook 3.5.1). The run:
 
 So the platform suspends synchronously (spec 4.3), answers a suspended subscriber the way it
 answers a wrong key, and admits INI and HIA from "Suspended" (spec 4.4.1.2.1, 4.4.1.2.2).
+
+## Customer acknowledgement (HAC) and PTK (2026-10-27)
+
+The platform serves `HAC` and `PTK` as administrative downloads, although the test
+subscriber's HTD lists neither. HAC is a `pain.002.001.03` log of every EBICS action since the
+last acknowledged HAC download, including the HAC downloads themselves; the first one reached
+back to 2026-10-26. ZKB names the BTF version as `MsgNameVersion` and ends each order with the
+neutral `ORDER_HAC_FINAL`, with the first and last record of an uploaded file as a hex display.
+The log explains earlier results:
+
+| Order | What HAC shows |
+| --- | --- |
+| the two `SCT` pain.001 uploads | signature check `TD03` IncorrectFileStructure: rejected, hence never processed |
+| the first PUB (2026-10-26) | signature check `DS0D`, the A006 fault of incident 3 in the ledger |
+| SPR `N016` | signature check `DS01`; the refused second SPR `N017` is `TA01` |
+
+`PTK` returns the same events as German plain text (Latin-1, CRLF). It is not part of EBICS
+3.0, so the library does not read it.
 
 ## How the simulation is driven (validated 2026-07-05)
 

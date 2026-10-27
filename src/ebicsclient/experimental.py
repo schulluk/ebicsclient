@@ -21,8 +21,9 @@ from ebicsclient.models import BusinessTransactionFormat
 #: Verified: the tuple matches the ZKB test subscriber's HTD registry, which registers it
 #: without the ``GLB`` scope that ZKB's catalogue shows, and the upload request validates
 #: against the H005 schema. Not verified: processing. The ZKB test platform answers an upload
-#: under this BTF with ``000000`` and then never processes it (no pain.002, no booking), while
-#: the same file is processed under ``PAIN_001`` and ``PAIN_001_CGI`` (docs/09). At ZKB, send
+#: under this BTF with ``000000`` and then never processes it (no pain.002, no booking): its
+#: customer acknowledgement (HAC) logs the signature check as ``TD03`` IncorrectFileStructure.
+#: The same file is processed under ``PAIN_001`` and ``PAIN_001_CGI`` (docs/09). At ZKB, send
 #: SEPA payments through one of those two.
 PAIN_001_SEPA = BusinessTransactionFormat(
     service_name="SCT",

@@ -32,7 +32,7 @@ from ebicsclient.errors import (
     UnknownReturnCodeError,
     UploadUnconfirmedError,
 )
-from ebicsclient.formats import camt052, camt053, camt054, iso20022, pain002
+from ebicsclient.formats import camt052, camt053, camt054, hac, iso20022, pain002
 from ebicsclient.formats.container import extract_documents
 from ebicsclient.models import (
     CAMT_052,
@@ -44,6 +44,7 @@ from ebicsclient.models import (
     BankKeys,
     BankParameters,
     BusinessTransactionFormat,
+    CustomerAcknowledgement,
     CustomerInfo,
     DateRange,
     EbicsVersion,
@@ -810,6 +811,54 @@ class Client:
         return h005.parse_available_order_types(
             self._run_download_transaction(request, bank_keys)
         )
+
+    def customer_acknowledgement(
+        self, *, receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE
+    ) -> CustomerAcknowledgement:
+        """Download the bank's log of this customer's EBICS actions (HAC).
+
+        Runs the administrative ``HAC`` download (EBICS 3.0 spec 10) and returns every
+        action since the previous HAC download, for all subscribers of the Partner ID: each
+        upload, download and signature check with its result, and when each order was
+        finished at EBICS level. It shows, for example, whether the bank verified an order's
+        electronic signature (reason code ``DS01``), which an accepted upload does not tell.
+
+        The log is parsed before the receipt, so one the library cannot read stays at the
+        bank (negative receipt). The bank's keys must already be available (call :meth:`hpb`
+        first).
+
+        Args:
+            receipt_policy: ``ACKNOWLEDGE`` (default) marks the log as fetched, so the next
+                HAC download starts after it; ``KEEP`` leaves it at the bank, to read it again.
+
+        Returns:
+            The customer acknowledgement.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: a request could not be delivered.
+            ProtocolError: a response could not be parsed.
+            ResponseAuthenticationError: a response failed signature verification.
+            ReturnCodeError: the bank rejected the request (e.g. ``090005``, nothing new to
+                report).
+            CryptoError: the order data could not be decrypted.
+            MessageFormatError: the log is not a readable customer acknowledgement (left at
+                the bank).
+        """
+        bank_keys = self._require_bank_keys("HAC")
+        logger.info("HAC: requesting the customer acknowledgement")
+        request = h005.build_admin_download_initialisation_request(
+            self._bank, self._user, self._keyring, bank_keys, "HAC"
+        )
+        parsed: list[CustomerAcknowledgement] = []
+
+        def parse_before_receipt(order_data: bytes) -> None:
+            parsed.append(hac.parse(order_data))
+
+        self._run_download_transaction(
+            request, bank_keys, validate=parse_before_receipt, receipt_policy=receipt_policy
+        )
+        return parsed[0]
 
     def subscriber_info(self) -> SubscriberInfo:
         """Download the bank's registered data for this subscriber (HTD).

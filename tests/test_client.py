@@ -915,7 +915,41 @@ def test_supported_versions_needs_no_bank_keys(keyring: Keyring) -> None:
     assert request.findtext("{http://www.ebics.org/H000}HostID") == "HOST"
 
 
-@pytest.mark.parametrize("method", ["customer_info", "bank_parameters"])
+@pytest.mark.parametrize(
+    ("receipt_policy", "receipt_code"),
+    [(ReceiptPolicy.ACKNOWLEDGE, "0"), (ReceiptPolicy.KEEP, "1")],
+)
+def test_customer_acknowledgement_runs_the_hac_admin_download(
+    receipt_policy: ReceiptPolicy, receipt_code: str, keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    order_data = (Path(__file__).parent / "data" / "hac_zkb_sample.xml").read_bytes()
+    responses = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    acknowledgement = client.customer_acknowledgement(receipt_policy=receipt_policy)
+    assert len(acknowledgement.entries) == 15
+    opened = etree.fromstring(transport.posts[0])
+    assert opened.findtext(f".//{{{_NS}}}AdminOrderType") == "HAC"
+    assert opened.find(f".//{{{_NS}}}StandardOrderParams") is not None
+    assert _receipt_code(transport.posts[-1]) == receipt_code
+
+
+def test_customer_acknowledgement_leaves_an_unreadable_log_at_the_bank(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # Parsed before the receipt: a log the library cannot read is not consumed.
+    order_data = (Path(__file__).parent / "data" / "pain002_part.xml").read_bytes()
+    responses = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    with pytest.raises(MessageFormatError):
+        client.customer_acknowledgement()
+    assert _receipt_code(transport.posts[-1]) == "1"
+
+
+@pytest.mark.parametrize("method", ["customer_info", "bank_parameters", "customer_acknowledgement"])
 def test_admin_downloads_require_hpb_first(method: str, keyring: Keyring) -> None:
     client, _ = _client(_OK_RESPONSE, keyring)
     with pytest.raises(ClientStateError):

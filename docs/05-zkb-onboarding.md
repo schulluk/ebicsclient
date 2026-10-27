@@ -93,6 +93,7 @@ sequence must be:
 
 - **Submission** (key mgmt): `HCA`, `HCS`, `HIA`, `INI`, `PUB`, `SPR`.
 - **Download**: `HAA`, `HAC`, `HKD`, `HPB`, `HPD`, `HTD`, `PTK`, plus the BTF business transactions.
+  `PTK` is not part of EBICS 3.0 and the library does not read it; `HAC` carries the same log.
 - **The one we use** — statement download BTF:
 
   | Field | Value |

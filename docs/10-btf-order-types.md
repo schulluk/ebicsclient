@@ -31,9 +31,10 @@ platform's `pain.001.001.09.ch.03` validation version; see [docs/09](09-zkb-test
 **CCT (`SCT / pain.001 / 09`) is only in the experimental module**
 (`ebicsclient.experimental.PAIN_001_SEPA`). HTD registers it without the `GLB` scope. The
 test platform answered uploads under both tuples, with and without `GLB`, with `000000`, but
-never processed them: no pain.002, no booking, no protocol entry (2026-10-27). The same SEPA
-file was processed under `XE2` and under `XCT`, so at ZKB a SEPA payment (payment type S)
-goes through `PAIN_001` or `PAIN_001_CGI`.
+never processed them: no pain.002, no booking, no protocol entry (2026-10-27). The customer
+acknowledgement (HAC) shows the bank rejected both in its signature check with `TD03`
+IncorrectFileStructure. The same SEPA file was processed under `XE2` and under `XCT`, so at
+ZKB a SEPA payment (payment type S) goes through `PAIN_001` or `PAIN_001_CGI`.
 
 ## Downloads
 

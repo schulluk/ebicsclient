@@ -68,8 +68,8 @@ subscriber whose key may be compromised (SPR); statement and
 report downloads (camt.053/052/054, pain.002) with optional dated ranges, each booking resolved
 into its single transactions (references, payer, remittance information), and an opt-in check
 that the bank delivered the requested message version (`VersionPolicy.STRICT`); payment uploads
-(pain.001); and the bank's registered data (HTD/HKD), parameters (HPD) and supported versions
-(HEV). Interrupted transfers resume within their transaction (EBICS recovery), and an upload
+(pain.001); the bank's log of every EBICS action and its result (HAC); and the bank's
+registered data (HTD/HKD), parameters (HPD) and supported versions (HEV). Interrupted transfers resume within their transaction (EBICS recovery), and an upload
 whose final answer stays lost is reported as unconfirmed, never as safe to retry. Read and
 write are validated live against ZKB. Pure Python (`cryptography`, `lxml`), no PHP/Java
 sidecar. Not yet built: multi-person signatures (EDS/VEU) and several administrative order

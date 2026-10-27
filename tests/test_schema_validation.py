@@ -145,7 +145,7 @@ def test_download_receipt_request_validates(
     assert document.findtext(f".//{{{_NS}}}ReceiptCode") == expected_code
 
 
-@pytest.mark.parametrize("admin_order_type", ["HAA", "HTD", "HKD", "HPD"])
+@pytest.mark.parametrize("admin_order_type", ["HAA", "HTD", "HKD", "HPD", "HAC"])
 def test_admin_download_request_validates(
     admin_order_type: str, bank: Bank, user: User, keyring: Keyring
 ) -> None:
