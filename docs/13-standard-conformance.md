@@ -82,6 +82,8 @@ absent, not excluded — unless the **Notes** say otherwise.
 | `SignatureFlag` on BTU order params | Mandated | ✅ | live | |
 | Arbitrary business upload via a custom BTF | Mandated | ✅ | live | Any `BusinessTransactionFormat` |
 | pain.001 credit transfer submission | Mandated (ISO) | ✅ | live | |
+| ↳ in the original ISO schema (CGI), BTF `MCT / CGI / XCH` | Mandated (ISO) | ✅ | live | `PAIN_001_CGI`. Processed by the ZKB test platform for SEPA payments; it rejects foreign-currency payments in this schema |
+| ↳ through the SEPA BTF `SCT` | Mandated (ISO) | 🟡 | HTD + XSD | Experimental: `ebicsclient.experimental.PAIN_001_SEPA`. The ZKB test platform accepts such uploads with `000000` but never processes them, so they cannot be validated there. At ZKB, SEPA payments go through `PAIN_001` or `PAIN_001_CGI` |
 | pain.008 direct-debit submission | Mandated (ISO) | 🟡 | | Works via a custom BTF; no typed helper |
 | Pre-validation before submission — `PreValidation` (account authorisations / amounts) | Mandated (optional) | ❌ | | Optional bank pre-check sent with the order; not implemented |
 | Generic order parameters + `AdditionalOrderInfo` (free-text note ≤255 chars) | Mandated (optional) | ❌ | | Bank-specific Name/Value params and an unstructured order note; not exposed |

@@ -36,6 +36,7 @@ from ebicsclient.models import (
     CAMT_054_BOOKING_INFORMATION,
     CAMT_054_COLLECTIVE_DEBITS,
     PAIN_001,
+    PAIN_001_CGI,
     PAIN_002,
     AuthorisationLevel,
     Bank,
@@ -599,6 +600,7 @@ def test_parse_subscriber_info_reads_the_real_htd_response() -> None:
         CAMT_054_BOOKING_INFORMATION,
         CAMT_054_COLLECTIVE_DEBITS,
         PAIN_001,
+        PAIN_001_CGI,
         PAIN_002,
     ],
 )

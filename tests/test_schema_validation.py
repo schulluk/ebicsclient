@@ -17,12 +17,14 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
-from ebicsclient import keys
+from ebicsclient import experimental, keys
 from ebicsclient.models import (
     CAMT_053,
     PAIN_001,
+    PAIN_001_CGI,
     Bank,
     BankKeys,
+    BusinessTransactionFormat,
     DateRange,
     Keyring,
     KeyRotation,
@@ -153,13 +155,15 @@ def test_admin_download_request_validates(
     _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
 
 
+@pytest.mark.parametrize("btf", [PAIN_001, PAIN_001_CGI, experimental.PAIN_001_SEPA])
 def test_upload_initialisation_request_validates_except_the_signature_flag(
-    bank: Bank, user: User, keyring: Keyring
+    btf: BusinessTransactionFormat, bank: Bank, user: User, keyring: Keyring
 ) -> None:
+    # PAIN_001_CGI adds a ServiceOption and PAIN_001_SEPA drops the Scope: both shapes must hold.
     bank_keys = _bank_keys(keys.generate_keyring())
     payload = h005.prepare_upload(user, keyring, bank_keys, b"<Document>pay</Document>")
     request = h005.build_upload_initialisation_request(
-        bank, user, keyring, bank_keys, PAIN_001, payload
+        bank, user, keyring, bank_keys, btf, payload
     )
     schema = _schema("ebics_request_H005.xsd")
     document = etree.fromstring(request)

@@ -321,6 +321,20 @@ PAIN_001 = BusinessTransactionFormat(
     message_version="09",
 )
 
+#: The pain.001.001.09 payment-submission upload in the original ISO 20022 schema, as the
+#: Common Global Implementation (CGI) uses it (the ZKB ``XCT`` order type, ``MCT / CGI /
+#: XCH / pain.001 / 09``, no container). Confirmed against the bank's HTD registry and
+#: processed live by the ZKB test platform. Which payment types a bank accepts in this schema
+#: is its own rule: the ZKB test platform allows only SEPA payments (type S) and rejects
+#: foreign-currency payments abroad (docs/09).
+PAIN_001_CGI = BusinessTransactionFormat(
+    service_name="MCT",
+    message_name="pain.001",
+    scope="CGI",
+    message_version="09",
+    service_option="XCH",
+)
+
 #: The Swiss pain.002.001.10 payment-status-report download (the ZKB ``Z01`` order type).
 #: The bank's own HTD registry lists this BTF as ``PSR / CH / pain.002 / 10`` **without** a
 #: Container — a request carrying ``Container=ZIP`` is rejected with ``091005``, even though

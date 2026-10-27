@@ -214,6 +214,21 @@ can't get them. The `pyproject.toml` is in the repo, so anyone who clones instal
 (`uv sync --all-groups`, or `pip install -e . --group dev` on pip >= 25.1). Contributor setup steps live in
 [CONTRIBUTING.md](../CONTRIBUTING.md); recommend `uv` (no pip-version floor) with pip as the fallback.
 
+## The experimental module
+
+The regular API only gets features that ran against a real bank or a bank's test platform.
+A feature that is implemented to the standard, or registered at a bank, but has not passed
+such a test goes into `ebicsclient.experimental` instead:
+
+- Nothing there is exported from `ebicsclient` (`tests/test_experimental.py` enforces it), and
+  it may change or move without a deprecation period.
+- Each item's docstring says what is verified and what is not, and the item has a ledger row
+  marked UNVERIFIED for what lacks an oracle.
+- Whatever can be checked offline still is: a BTF against the bank's HTD registry, a request
+  against the XSD.
+- An item moves to the regular API after a live test, with a changelog entry, and is dropped if
+  the test shows it wrong.
+
 ## Versioning, changelog, CI
 
 - SemVer. `CHANGELOG.md` (Keep a Changelog format). Keep the README "Status" current (per CLAUDE.md).

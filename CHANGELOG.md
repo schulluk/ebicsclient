@@ -16,6 +16,14 @@ and 1.3.1 were never published.
   sends a negative receipt, so the data stays at the bank. The default,
   `VersionPolicy.ACCEPT_ANY`, logs a mismatch as a warning and returns the data.
 - BTF constants `CAMT_054_BOOKING_INFORMATION` and `CAMT_054_COLLECTIVE_DEBITS`.
+- BTF constant `PAIN_001_CGI` (`MCT / CGI / XCH / pain.001 / 09`) for payments in the
+  original ISO 20022 schema. A SEPA payment uploaded under it was processed live by the
+  ZKB test platform, which accepts only SEPA payments in this schema.
+- `ebicsclient.experimental`, a module for features that are implemented but not yet
+  validated against a bank. Nothing in it is exported from `ebicsclient`, and it may change
+  without a deprecation period. Its first item is `PAIN_001_SEPA`
+  (`SCT / pain.001 / 09`): the tuple matches ZKB's registry, but the ZKB test platform
+  accepts uploads under it without ever processing them.
 - `Entry.transactions` lists the single transactions behind a booking entry
   (`NtryDtls/TxDtls`) as `TransactionDetails`: the amount, the references (message,
   payment, instruction and end-to-end IDs, and the bank's own), the payer's and payee's

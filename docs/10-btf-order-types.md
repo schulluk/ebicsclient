@@ -28,6 +28,13 @@ so this table is the external oracle for that constant.
 For our M3 CH payment upload the target is **XE2** = `MCT / CH / pain.001 / 09` (matching the
 platform's `pain.001.001.09.ch.03` validation version; see [docs/09](09-zkb-test-platform-settings.md)).
 
+**CCT (`SCT / pain.001 / 09`) is only in the experimental module**
+(`ebicsclient.experimental.PAIN_001_SEPA`). HTD registers it without the `GLB` scope. The
+test platform answered uploads under both tuples, with and without `GLB`, with `000000`, but
+never processed them: no pain.002, no booking, no protocol entry (2026-10-27). The same SEPA
+file was processed under `XE2` and under `XCT`, so at ZKB a SEPA payment (payment type S)
+goes through `PAIN_001` or `PAIN_001_CGI`.
+
 ## Downloads
 
 | 2.5 type | Description | ServiceName | Scope | ServiceOption | MsgName | Version | Container |
@@ -64,6 +71,8 @@ Each constant is the row above, checked against the bank's HTD registry
 | Order type | Constant | Content (observed live) |
 | --- | --- | --- |
 | XE2 v09 | `PAIN_001` | payment submission |
+| XCT v09 | `PAIN_001_CGI` | payment submission in the original ISO schema; the test platform accepts only SEPA payments (type S) in it |
+| CCT v09 | `experimental.PAIN_001_SEPA` | experimental: accepted by the test platform, never processed |
 | Z01 v10 | `PAIN_002` | payment status reports |
 | Z52 v08 | `CAMT_052` | intraday report |
 | Z53 v08 | `CAMT_053` | end-of-day statement |

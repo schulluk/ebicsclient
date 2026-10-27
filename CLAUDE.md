@@ -93,7 +93,13 @@ signature. All of this is built and bank-accepted.
 The pain.002/camt.052/camt.054 parsers are built (M5, validated on genuine ZKB messages).
 Still deliberately **out of scope** — do not build until there is a concrete need and a way to
 validate it: distributed signatures (EDS — the ZKB test subscriber has ``NumSigRequired=0``, so
-EDS cannot be validated there) and multi-bank quirk handling. **H004 and earlier EBICS versions
+EDS cannot be validated there) and multi-bank quirk handling.
+
+**Only bank-tested features go into the regular API.** What is implemented to the standard, or
+registered at a bank, but has not run against a real bank or a bank test platform goes into
+`ebicsclient.experimental`: not exported from `ebicsclient`, free to change, each item stating
+what is and is not verified. It moves to the regular API after a live test (rules in
+[docs/06](docs/06-engineering-conventions.md)). **H004 and earlier EBICS versions
 will never be supported** (owner decision; see docs/04) — the `protocol/` seam exists for a
 future EBICS version, not for the past. Scope creep is what turns a stable standard into a
 maintenance burden.

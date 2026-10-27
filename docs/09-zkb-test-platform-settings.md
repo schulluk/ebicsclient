@@ -93,6 +93,8 @@ These are the entries our camt.053 parser will encounter in the downloaded state
 | Booking advices (camt.054 incl. QRR/SCOR/LSV) | QRR/SCOR/LSV collective resolutions enabled | `download_booking_advices(btf)` | ✅ live; see the simulation section below |
 | Single transactions of a booking (references, payer, remittance text) | QRR/SCOR/LSV collective resolutions enabled | `Entry.transactions` | ✅ live (version 04 from simulated credits, version 08 from a pain.001 batch debit) |
 | pain.001 upload | pain.001.001.09.ch.03 | `client.upload(PAIN_001, …)` | ✅ live (processed since the A006 fix) |
+| pain.001 upload, original ISO schema (CGI) | — | `client.upload(PAIN_001_CGI, …)` | ✅ live for SEPA payments; see the section below |
+| pain.001 upload, SEPA BTF (`SCT`) | — | `experimental.PAIN_001_SEPA` | ⬜ accepted with `000000`, never processed; see the section below |
 | pain.002 status back | validation message on; channel = Datalink EBICS | `download_payment_status_reports()` | ✅ live |
 | Reject simulation (negative path) | every third transaction | — | ✅ live (`PART`, two rejected) |
 | Simulated incoming credits (QRR/SCOR/NON/LSV) | CSV upload `OTH/BIL/CH004TPS/csv` | `tools/zkb-incoming-payments.py` | ✅ live (test tool, not library API) |
@@ -144,6 +146,27 @@ Three platform behaviours to know:
   new one: the ZIPs then hold the documents of both runs. The referenced payments are told
   apart by their run-specific references, and the `NON` payment by its remittance text,
   which carries the run stamp.
+
+## SEPA and CGI uploads (2026-10-27)
+
+One SEPA file (three EUR payments to German, French and Austrian example IBANs, service level
+`SEPA`, `ChrgBr` `SLEV`) went up under four BTFs, each copy with its own message ID:
+
+| BTF | Outcome |
+| --- | --- |
+| `MCT / CH / pain.001 / 09` (`PAIN_001`) | processed as `pain.001.001.09.ch.03`: pain.002 `ACTC`, then `PART` (the third payment rejected by the *every third transaction* simulation, `CH21`); booked as one CHF batch debit whose transaction details carry the EUR amounts |
+| `MCT / CGI / XCH / pain.001 / 09` (`PAIN_001_CGI`) | the same, processed as `pain.001.001.09` |
+| `SCT / pain.001 / 09` (the HTD tuple) | `000000`, then nothing: no pain.002, no booking, no protocol entry |
+| `SCT / GLB / pain.001 / 09` (the catalogue tuple, not in HTD) | the same: accepted, never processed |
+
+A second file under `PAIN_001_CGI`, with USD and GBP payments to a British account (payment
+type X), was processed and rejected as a whole: the platform's protocol says that this schema
+admits only payment type S. ZKB's ISO handbook (section 5.3) describes foreign payments in
+the CGI schema as payment type X, so the platform is stricter than the handbook here.
+
+So the `SCT` channel cannot be validated on this platform, and an unregistered tuple
+(`SCT / GLB`) is not refused either: here too, `000000` on an upload says nothing about
+processing.
 
 ## How the simulation is driven (validated 2026-07-05)
 

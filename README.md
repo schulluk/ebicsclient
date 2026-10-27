@@ -70,7 +70,8 @@ that the bank delivered the requested message version (`VersionPolicy.STRICT`); 
 (pain.001); and the bank's registered data (HTD/HKD), parameters (HPD) and supported versions
 (HEV). Read and write are validated live against ZKB. Pure Python (`cryptography`, `lxml`), no
 PHP/Java sidecar. Not yet built: multi-person signatures (EDS/VEU) and several administrative
-order types.
+order types. What is implemented but not yet validated against a bank is kept apart in
+`ebicsclient.experimental`.
 
 Full capability-by-capability coverage, gaps, and verification status:
 **[docs/13-standard-conformance.md](https://github.com/schulluk/ebicsclient/blob/main/docs/13-standard-conformance.md)**.
