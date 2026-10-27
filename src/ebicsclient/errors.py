@@ -194,8 +194,10 @@ class UploadUnconfirmedError(EbicsError):
     The bank takes an order once it has received the last segment (EBICS 3.0 spec 5.1.3.1),
     so the answer to that segment decides whether the order exists. This error means the
     segment was sent but no trustworthy answer came back: the connection failed, the response
-    could not be verified, or it carried a return code this client does not know. The bank
-    may hold the order, and may execute it.
+    could not be verified, or it carried a return code this client does not know. The client
+    has already sent the segment again within the same transaction as far as its
+    ``recovery_attempts`` allow (spec 5.5.2), without a confirming answer. The bank may hold
+    the order, and may execute it.
 
     **Never send the order again automatically**: if the bank has it, a second upload pays
     twice. Check first whether it arrived — a payment status report (pain.002) for its

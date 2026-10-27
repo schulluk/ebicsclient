@@ -88,6 +88,9 @@ _OK_RETURN_CODE = "000000"
 # for a negative one (spec 5.6.1.2.2). Both confirm the receipt was accepted — the polarity is
 # set by what the client sent, not by which code comes back — so both count as success here.
 _RECEIPT_OK_CODES = frozenset({"000000", "011000", "011001"})
+# EBICS_TX_RECOVERY_SYNC: the bank names its recovery point instead of taking the step
+# (spec 5.5.2, 5.6.2; Annex 1).
+_RECOVERY_SYNC = "061101"
 
 # Return codes whose meaning this client has verified — from live ZKB responses (the bank's
 # own ReportText names the code) or the EBICS specification. Which of them count as success
@@ -98,9 +101,11 @@ _KNOWN_RETURN_CODES = {
     "000000": "EBICS_OK",  # observed live
     "011000": "EBICS_DOWNLOAD_POSTPROCESS_DONE",  # observed live (positive receipt ack)
     "011001": "EBICS_DOWNLOAD_POSTPROCESS_SKIPPED",  # spec counterpart of 011000
+    "011101": "EBICS_TX_SEGMENT_NUMBER_UNDERRUN",  # Annex 1
     "061001": "EBICS_AUTHENTICATION_FAILED",  # EBICS spec
     "061002": "EBICS_INVALID_REQUEST",  # EBICS spec
     "061099": "EBICS_INTERNAL_ERROR",  # EBICS spec
+    "061101": "EBICS_TX_RECOVERY_SYNC",  # Annex 1; spec 5.5.2, 5.6.2; observed live
     "090004": "EBICS_INVALID_ORDER_DATA_FORMAT",  # Annex 1; spec 4.6.1.1 (key changes)
     "090005": "EBICS_NO_DOWNLOAD_DATA_AVAILABLE",  # observed live
     "091002": "EBICS_INVALID_USER_OR_USER_STATE",  # observed live
@@ -108,6 +113,13 @@ _KNOWN_RETURN_CODES = {
     "091004": "EBICS_INVALID_USER_STATE",  # Annex 1; spec 4.6.1.1 names it UNKNOWN_USER_STATE
     "091005": "EBICS_INVALID_ORDER_IDENTIFIER",  # observed live
     "091008": "EBICS_BANK_PUBKEY_UPDATE_REQUIRED",  # Annex 1
+    # Transaction administration (Annex 1; spec 5.4, 5.5.1.2.2, 5.6.1.2.2).
+    "091101": "EBICS_TX_UNKNOWN_TXID",  # observed live (a receipt sent twice)
+    "091102": "EBICS_TX_ABORT",
+    "091103": "EBICS_TX_MESSAGE_REPLAY",  # spec 11.4.2.2
+    "091104": "EBICS_TX_SEGMENT_NUMBER_EXCEEDED",
+    "091105": "EBICS_RECOVERY_NOT_SUPPORTED",
+    "091122": "EBICS_ORDER_ALREADY_EXISTS",
     # Key-management rejections of PUB/HCA/HCS order data (spec 4.6.1.1; codes from Annex 1).
     "091201": "EBICS_KEYMGMT_UNSUPPORTED_VERSION_SIGNATURE",
     "091202": "EBICS_KEYMGMT_UNSUPPORTED_VERSION_AUTHENTICATION",
@@ -1272,6 +1284,82 @@ def parse_upload_initialisation_response(response: bytes) -> str:
     _check_return_code(root)
     static = _child(_child(root, "header"), "static")
     return _child_text(static, "TransactionID")
+
+
+def upload_recovery_point(response: bytes, num_segments: int) -> int | None:
+    """Read the bank's recovery point from an upload-transfer response, if it names one.
+
+    When the bank answers a transfer step with ``EBICS_TX_RECOVERY_SYNC``, the response
+    identifies the last transaction step the bank completed, its recovery point (spec
+    5.5.1.1.2, 5.5.2): the initialisation (``TransactionPhase`` ``Initialisation``, no
+    segment), or the transfer of segment ``SegmentNumber``. The upload continues with the
+    segment after it. Pass only a response whose signature has been verified.
+
+    Args:
+        response: The raw ``ebicsResponse`` bytes from the bank.
+        num_segments: The number of segments of the upload.
+
+    Returns:
+        ``None`` if the response is not an ``EBICS_TX_RECOVERY_SYNC``. Otherwise the number
+        of segments the bank holds: ``0`` when its recovery point is the initialisation.
+
+    Raises:
+        ProtocolError: the response is malformed, or names a recovery point outside the
+            upload.
+    """
+    mutable = _sync_mutable(response)
+    if mutable is None:
+        return None
+    if _child_text(mutable, "TransactionPhase").strip() == _PHASE_INITIALISATION:
+        return 0
+    return _recovery_segment(mutable, num_segments, minimum=0)
+
+
+def download_recovery_point(response: bytes, num_segments: int) -> int | None:
+    """Read the bank's recovery point from a download-transfer or receipt response.
+
+    With ``EBICS_TX_RECOVERY_SYNC`` the bank names the last segment it has delivered to the
+    client (``SegmentNumber``; ``1`` when the recovery point is the initialisation, which
+    carries the first segment; spec 5.6.1.1.2, 5.6.1.1.3, 5.6.2). The download continues
+    with a request for a segment after a valid recovery point. Pass only a response whose
+    signature has been verified.
+
+    Args:
+        response: The raw ``ebicsResponse`` bytes from the bank.
+        num_segments: The number of segments of the download.
+
+    Returns:
+        ``None`` if the response is not an ``EBICS_TX_RECOVERY_SYNC``. Otherwise the number
+        of the last segment the bank has delivered.
+
+    Raises:
+        ProtocolError: the response is malformed, or names a recovery point outside the
+            download.
+    """
+    mutable = _sync_mutable(response)
+    if mutable is None:
+        return None
+    return _recovery_segment(mutable, num_segments, minimum=1)
+
+
+def _sync_mutable(response: bytes) -> etree._Element | None:
+    # The technical return code is in the header (spec 5.5.1.1.2); the body's business
+    # return code of a sync answer is 000000 (spec Diagram 50).
+    mutable = _child(_child(_parse(response), "header"), "mutable")
+    return_code = mutable.find(f"{{{NAMESPACE}}}ReturnCode")
+    if return_code is None or (return_code.text or "").strip() != _RECOVERY_SYNC:
+        return None
+    return mutable
+
+
+def _recovery_segment(mutable: etree._Element, num_segments: int, *, minimum: int) -> int:
+    segment_number, _ = _segment(mutable)
+    if not minimum <= segment_number <= num_segments:
+        raise ProtocolError(
+            f"EBICS_TX_RECOVERY_SYNC names segment {segment_number} as the recovery point of a "
+            f"transaction with {num_segments} segment(s)"
+        )
+    return segment_number
 
 
 def parse_upload_transfer_response(response: bytes) -> None:

@@ -618,6 +618,61 @@ def test_every_business_transaction_format_constant_is_registered_at_the_bank(
     assert btf in permitted
 
 
+def _sync_response(phase: str, segment: str | None, code: str = "061101") -> bytes:
+    # The shape ZKB sent on 2026-10-27 for a resent segment (spec Diagram 50).
+    segment_number = (
+        f'<SegmentNumber lastSegment="false">{segment}</SegmentNumber>' if segment else ""
+    )
+    return (
+        f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static/><mutable>'
+        f"<TransactionPhase>{phase}</TransactionPhase>{segment_number}<OrderID>N013</OrderID>"
+        f"<ReturnCode>{code}</ReturnCode>"
+        "<ReportText>[EBICS_TX_RECOVERY_SYNC] Synchronisation necessary</ReportText>"
+        "</mutable></header><body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
+    ).encode()
+
+
+def test_upload_recovery_point_reads_the_segment_the_bank_holds() -> None:
+    assert h005.upload_recovery_point(_sync_response("Transfer", "1"), 2) == 1
+
+
+def test_upload_recovery_point_of_the_initialisation_is_zero_segments() -> None:
+    # Spec 5.5.1.1.2: in the initialisation phase the response carries no SegmentNumber.
+    assert h005.upload_recovery_point(_sync_response("Initialisation", None), 2) == 0
+
+
+def test_download_recovery_point_of_the_initialisation_is_the_first_segment() -> None:
+    # Spec 5.6.1.1.2: SegmentNumber is 1 when the recovery point is the initialisation.
+    assert h005.download_recovery_point(_sync_response("Initialisation", "1"), 3) == 1
+
+
+@pytest.mark.parametrize("parse", [h005.upload_recovery_point, h005.download_recovery_point])
+def test_recovery_point_is_none_without_a_sync(parse: object) -> None:
+    response = _sync_response("Transfer", "1", code="000000")
+    assert parse(response, 2) is None  # type: ignore[operator]
+
+
+@pytest.mark.parametrize(
+    ("parse", "segment"),
+    [
+        (h005.upload_recovery_point, "3"),
+        (h005.download_recovery_point, "3"),
+        (h005.download_recovery_point, "0"),
+    ],
+)
+def test_recovery_point_outside_the_transaction_fails_closed(parse: object, segment: str) -> None:
+    with pytest.raises(ProtocolError):
+        parse(_sync_response("Transfer", segment), 2)  # type: ignore[operator]
+
+
+def test_recovery_sync_is_a_known_return_code() -> None:
+    # Annex 1: once no recovery attempt is left, the sync is reported as a known failure.
+    with pytest.raises(ReturnCodeError) as caught:
+        h005.parse_upload_transfer_response(_sync_response("Transfer", "1"))
+    assert caught.value.code == "061101"
+    assert not isinstance(caught.value, UnknownReturnCodeError)
+
+
 def test_parse_upload_initialisation_response_returns_the_transaction_id() -> None:
     response = (
         f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static>'

@@ -29,6 +29,7 @@ from ebicsclient.errors import (
     KeyChangeUnconfirmedError,
     MessageFormatError,
     MessageVersionMismatchError,
+    ProtocolError,
     ResponseAuthenticationError,
     Retryability,
     ReturnCodeError,
@@ -167,7 +168,10 @@ def _download_client(
     bank_keys: BankKeys,
     *,
     version_policy: VersionPolicy = VersionPolicy.ACCEPT_ANY,
+    recovery_attempts: int = 0,
 ) -> tuple[Client, _QueueTransport]:
+    # Recovery is off unless a test asks for it, so a queued failure is the final word; the
+    # recovery tests below pass recovery_attempts explicitly.
     transport = _QueueTransport(responses)
     client = Client(
         Bank(host_id="HOST", url="https://example.com/ebicsweb"),
@@ -175,6 +179,7 @@ def _download_client(
         keyring,
         transport=transport,  # type: ignore[arg-type]
         version_policy=version_policy,
+        recovery_attempts=recovery_attempts,
     )
     client._bank_keys = bank_keys  # HPB already ran; wire the keys the download needs.
     return client, transport
@@ -1053,3 +1058,326 @@ def test_change_keys_adopts_a_new_certificate_provider_only_on_success(
     client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring))
     client.change_keys(successor, KeyRotation.SIGNATURE, certificate_provider=provider)
     assert client._certificate_provider is provider
+
+
+# ---------------------------------------------------------------------------------------
+# Recovery (spec 5.4, 5.5.2, 5.6.2): a step whose answer was lost is repeated in the same
+# transaction, and a recovery point the bank names (EBICS_TX_RECOVERY_SYNC) is followed.
+# ---------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def pauses(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    recorded: list[float] = []
+    monkeypatch.setattr("ebicsclient.client.time.sleep", recorded.append)
+    return recorded
+
+
+def _lost() -> TransportError:
+    # The request went out, the answer never came back.
+    return TransportError("timed out", retryability=Retryability.TRANSIENT)
+
+
+def _sync(phase: str, segment: int | None, bank_keyring: Keyring) -> bytes:
+    # The shape ZKB sent for a resent segment on 2026-10-27 (spec Diagram 50).
+    segment_number = (
+        f'<SegmentNumber lastSegment="false">{segment}</SegmentNumber>'
+        if segment is not None
+        else ""
+    )
+    return sign_response(
+        (
+            f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static/><mutable>'
+            f"<TransactionPhase>{phase}</TransactionPhase>{segment_number}"
+            "<ReturnCode>061101</ReturnCode>"
+            "<ReportText>[EBICS_TX_RECOVERY_SYNC] Synchronisation necessary</ReportText>"
+            "</mutable></header><body><ReturnCode>000000</ReturnCode></body></ebicsResponse>"
+        ).encode(),
+        bank_keyring,
+    )
+
+
+def _requested_segments(posts: list[bytes]) -> list[str]:
+    # The SegmentNumber of every transfer request, in order ("-" for the receipt).
+    numbers = []
+    for post in posts[1:]:
+        segment = etree.fromstring(post).find(f".//{{{_NS}}}SegmentNumber")
+        numbers.append(segment.text or "" if segment is not None else "-")
+    return numbers
+
+
+def test_recovery_is_on_by_default(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    transport = _QueueTransport(
+        [
+            _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+            _lost(),
+            _upload_response("Transfer", bank_keyring),
+        ]
+    )
+    client = Client(
+        Bank(host_id="HOST", url="https://example.com/ebicsweb"),
+        User(partner_id="PARTNER1", user_id="USER1"),
+        keyring,
+        transport=transport,  # type: ignore[arg-type]
+    )
+    client._bank_keys = _bank_keys(bank_keyring)
+    assert client.upload(PAIN_001, b"<Document>pay</Document>") == "E" * 32
+    assert _requested_segments(transport.posts) == ["1", "1"]
+
+
+@pytest.mark.parametrize("attempts", [-1, True, "2", 1.0])
+def test_recovery_attempts_must_be_a_non_negative_int(attempts: object, keyring: Keyring) -> None:
+    with pytest.raises(ValueError if attempts == -1 else TypeError):
+        Client(
+            Bank(host_id="HOST", url="https://example.com/ebicsweb"),
+            User(partner_id="PARTNER1", user_id="USER1"),
+            keyring,
+            recovery_attempts=attempts,  # type: ignore[arg-type]
+        )
+
+
+def test_upload_resends_a_segment_and_follows_the_recovery_point(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    # Segment 1 arrived but its answer was lost; the resent copy is not the expected step,
+    # so the bank names segment 1 as its recovery point and the upload goes on with 2.
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        _lost(),
+        _sync("Transfer", 1, bank_keyring),
+        _upload_response("Transfer", bank_keyring),
+    ]
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), recovery_attempts=2
+    )
+    assert client.upload(PAIN_001, os.urandom(800_000)) == "E" * 32
+    assert _requested_segments(transport.posts) == ["1", "1", "2"]
+    assert pauses == [1.0]
+
+
+@pytest.mark.parametrize("answer", ["accepted", "bank-holds-all"])
+def test_upload_confirms_the_order_when_the_resent_final_segment_is_answered(
+    answer: str, keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    # ZKB answers a resent final segment with 000000 and takes the order once (2026-10-27);
+    # a recovery point covering every segment says the same.
+    final = (
+        _upload_response("Transfer", bank_keyring)
+        if answer == "accepted"
+        else _sync("Transfer", 1, bank_keyring)
+    )
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        _lost(),
+        final,
+    ]
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), recovery_attempts=2
+    )
+    assert client.upload(PAIN_001, b"<Document>pay</Document>") == "E" * 32
+    assert _requested_segments(transport.posts) == ["1", "1"]
+
+
+def test_upload_stays_unconfirmed_when_the_resent_final_segment_is_refused(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    # EBICS_TX_UNKNOWN_TXID: the bank may have closed the transaction after taking the order.
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        _lost(),
+        _transfer_response("091101", bank_keyring),
+    ]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring), recovery_attempts=2)
+    with pytest.raises(UploadUnconfirmedError) as caught:
+        client.upload(PAIN_001, b"<Document>pay</Document>")
+    assert isinstance(caught.value.__cause__, ReturnCodeError)
+    assert caught.value.__cause__.code == "091101"
+
+
+def test_upload_gives_up_after_the_recovery_attempts(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        _lost(),
+        _lost(),
+        _lost(),
+    ]
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), recovery_attempts=2
+    )
+    with pytest.raises(UploadUnconfirmedError):
+        client.upload(PAIN_001, b"<Document>pay</Document>")
+    assert _requested_segments(transport.posts) == ["1", "1", "1"]
+    assert pauses == [1.0, 2.0]
+
+
+def test_upload_failure_before_the_final_segment_stays_definite_after_recovery(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        _lost(),
+        _lost(),
+    ]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring), recovery_attempts=1)
+    with pytest.raises(TransportError):
+        client.upload(PAIN_001, os.urandom(800_000))
+
+
+def test_upload_goes_back_to_an_earlier_recovery_point(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    # The bank names the initialisation as its recovery point: it holds no segment, so the
+    # upload starts the transfer again from segment 1.
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        _upload_response("Transfer", bank_keyring),
+        _lost(),
+        _sync("Initialisation", None, bank_keyring),
+        _upload_response("Transfer", bank_keyring),
+        _upload_response("Transfer", bank_keyring),
+    ]
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), recovery_attempts=2
+    )
+    assert client.upload(PAIN_001, os.urandom(800_000)) == "E" * 32
+    assert _requested_segments(transport.posts) == ["1", "2", "2", "1", "2"]
+
+
+def test_upload_recovery_point_outside_the_upload_leaves_the_final_segment_unconfirmed(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        _lost(),
+        _sync("Transfer", 5, bank_keyring),
+    ]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring), recovery_attempts=1)
+    with pytest.raises(UploadUnconfirmedError):
+        client.upload(PAIN_001, b"<Document>pay</Document>")
+
+
+def test_upload_does_not_take_a_recovery_point_beyond_the_segments_sent(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    # Segment 1 of 2 is answered with "the bank holds both": impossible, since segment 2 was
+    # never sent. It must not count as a confirmation; with no attempt left, it fails.
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="E" * 32),
+        _sync("Transfer", 2, bank_keyring),
+    ]
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), recovery_attempts=0
+    )
+    with pytest.raises(ProtocolError, match="only segments up to 1"):
+        client.upload(PAIN_001, os.urandom(800_000))
+    assert _requested_segments(transport.posts) == ["1"]
+
+
+def test_change_keys_completes_when_the_resent_final_segment_is_answered(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    successor = keys.rotate_keyring(keyring, KeyRotation.SIGNATURE)
+    responses: list[bytes | Exception] = [
+        _upload_response("Initialisation", bank_keyring, transaction_id="F" * 32),
+        _lost(),
+        _upload_response("Transfer", bank_keyring),
+    ]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring), recovery_attempts=2)
+    client.change_keys(successor, KeyRotation.SIGNATURE)
+    assert client.keyring is successor
+
+
+def test_download_requests_a_segment_again_when_its_answer_was_lost(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    order_data = b"<Document>" + b"x" * 5000 + b"</Document>"
+    initialisation, transfer, receipt = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=2
+    )
+    responses: list[bytes | Exception] = [initialisation, _lost(), transfer, receipt]
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), recovery_attempts=2
+    )
+    assert client.download(CAMT_053) == order_data
+    assert _requested_segments(transport.posts) == ["2", "2", "-"]
+
+
+def test_download_follows_a_recovery_point_named_in_the_transfer_phase(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    order_data = b"<Document>" + b"y" * 9000 + b"</Document>"
+    initialisation, second, third, receipt = make_download_responses(
+        keyring, order_data, bank_keyring=bank_keyring, num_segments=3
+    )
+    # The bank considers segment 1 the last one delivered, so segment 2 is requested again.
+    responses: list[bytes | Exception] = [
+        initialisation,
+        second,
+        _sync("Transfer", 1, bank_keyring),
+        second,
+        third,
+        receipt,
+    ]
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), recovery_attempts=2
+    )
+    assert client.download(CAMT_053) == order_data
+    assert _requested_segments(transport.posts) == ["2", "3", "2", "3", "-"]
+
+
+def test_download_resends_the_receipt_when_its_answer_was_lost(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    initialisation, receipt = make_download_responses(
+        keyring, b"<Document/>", bank_keyring=bank_keyring
+    )
+    responses: list[bytes | Exception] = [initialisation, _lost(), receipt]
+    client, transport = _download_client(
+        responses, keyring, _bank_keys(bank_keyring), recovery_attempts=2
+    )
+    assert client.download(CAMT_053) == b"<Document/>"
+    assert [_receipt_code(post) for post in transport.posts[1:]] == ["0", "0"]
+
+
+def test_download_rejects_a_segment_that_differs_the_second_time(
+    keyring: Keyring, bank_keyring: Keyring, pauses: list[float]
+) -> None:
+    initialisation, second, _, _ = make_download_responses(
+        keyring,
+        b"<Document>" + b"z" * 9000 + b"</Document>",
+        bank_keyring=bank_keyring,
+        num_segments=3,
+    )
+    other_second = make_download_responses(
+        keyring,
+        b"<Document>" + b"w" * 9000 + b"</Document>",
+        bank_keyring=bank_keyring,
+        num_segments=3,
+    )[1]
+    responses: list[bytes | Exception] = [
+        initialisation,
+        second,
+        _sync("Transfer", 1, bank_keyring),
+        other_second,
+    ]
+    client, _ = _download_client(responses, keyring, _bank_keys(bank_keyring), recovery_attempts=2)
+    with pytest.raises(ProtocolError, match="different data"):
+        client.download(CAMT_053)
+
+
+def test_download_rejects_a_segment_other_than_the_one_requested(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    initialisation, _, third, _ = make_download_responses(
+        keyring,
+        b"<Document>" + b"v" * 9000 + b"</Document>",
+        bank_keyring=bank_keyring,
+        num_segments=3,
+    )
+    client, _ = _download_client([initialisation, third], keyring, _bank_keys(bank_keyring))
+    with pytest.raises(ProtocolError, match="sent segment 3"):
+        client.download(CAMT_053)

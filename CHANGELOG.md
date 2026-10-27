@@ -38,7 +38,22 @@ and 1.3.1 were never published.
   and `03.00`). It needs no keys, so it works before INI and HIA, for example to check
   that a bank offers EBICS 3.0. The bank does not sign this answer. Validated live
   against the ZKB test platform.
+- Transaction recovery (EBICS 3.0 spec 5.4): when the answer to an upload segment, a
+  download segment or a receipt is lost or cannot be verified, the client sends that step
+  again in the same transaction and follows the recovery point the bank names
+  (`EBICS_TX_RECOVERY_SYNC`). A repeated step stays in its transaction, so the bank never
+  takes an order twice. An upload whose final answer was lost is now confirmed when the
+  resent segment is accepted, instead of raising `UploadUnconfirmedError`.
+  `Client(recovery_attempts=…)` limits the repetitions per transaction (default 2; `0`
+  turns recovery off). Validated live against the ZKB test platform for uploads; download
+  recovery of several segments is tested offline only.
 - Python 3.15 is now supported and tested in CI, like 3.11 to 3.14.
+
+### Changed
+
+- A download fails closed with `ProtocolError` when the bank answers a segment request with
+  another segment than the one requested, or sends different data for a segment the second
+  time.
 
 ### Fixed
 

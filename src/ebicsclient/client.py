@@ -7,6 +7,7 @@ fetching the bank's keys (HPB) and downloading statements.
 
 import base64
 import logging
+import time
 from collections.abc import Callable, Sequence
 from typing import TypeVar
 
@@ -24,7 +25,10 @@ from ebicsclient.errors import (
     KeyChangeUnconfirmedError,
     MessageFormatError,
     MessageVersionMismatchError,
+    ProtocolError,
+    Retryability,
     ReturnCodeError,
+    TransportError,
     UnknownReturnCodeError,
     UploadUnconfirmedError,
 )
@@ -74,8 +78,59 @@ _SUBSCRIBER_STATE_INADMISSIBLE = "091002"
 # cannot be identified and counts as unreadable.
 _DOCUMENT_HEAD_LENGTH = 64 * 1024
 
+# Recovery (spec 5.4): how many times a transaction step may be repeated within one
+# transaction by default, and the pause before the n-th repetition (n times this).
+_DEFAULT_RECOVERY_ATTEMPTS = 2
+_RECOVERY_DELAY_SECONDS = 1.0
+
 
 _Parsed = TypeVar("_Parsed")
+
+
+def _answer_lost(error: EbicsError) -> bool:
+    """Whether a failed exchange left the bank's answer unknown, so the step may be repeated.
+
+    A transport failure that may pass (a timeout, a dropped connection, a 5xx) or a response
+    that cannot be read or verified: the request may or may not have reached the bank. A
+    verified return code is an answer, and a permanent transport failure will not pass.
+    """
+    if isinstance(error, TransportError):
+        return error.retryability is Retryability.TRANSIENT
+    return isinstance(error, ProtocolError) and not isinstance(error, ReturnCodeError)
+
+
+def _next_download_segment(point: int, total: int, segments: dict[int, str]) -> int:
+    """The segment to request after the bank named ``point`` as its recovery point.
+
+    The client may continue after any recovery point up to the bank's (spec 5.6.2), so it
+    goes back to the first segment it does not hold yet, if that comes earlier.
+    """
+    missing = [number for number in range(1, total + 1) if number not in segments]
+    return min([point + 1, *missing[:1]])
+
+
+class _RecoveryBudget:
+    """The recovery attempts left for one transaction.
+
+    The spec has the bank limit the recovery attempts per transaction and the client limit
+    its own attempts at a step (spec 5.4). Every repetition of a step and every recovery
+    point the bank names counts, so a transaction always ends.
+    """
+
+    def __init__(self, attempts: int) -> None:
+        self._remaining = attempts
+        self._used = 0
+
+    def spend(self, *, wait: bool) -> bool:
+        """Use one attempt, pausing first when ``wait`` is set; ``False`` if none is left."""
+        if self._remaining == 0:
+            return False
+        self._remaining -= 1
+        self._used += 1
+        if wait:
+            # A lost answer may come from a passing outage: give it a moment, longer each time.
+            time.sleep(_RECOVERY_DELAY_SECONDS * self._used)
+        return True
 
 
 def _entries_in_range_check(
@@ -191,6 +246,7 @@ class Client:
         certificate_provider: CertificateProvider = DEFAULT_CERTIFICATE_PROVIDER,
         bank_certificate_verifier: BankCertificateVerifier | None = None,
         version_policy: VersionPolicy = VersionPolicy.ACCEPT_ANY,
+        recovery_attempts: int = _DEFAULT_RECOVERY_ATTEMPTS,
     ) -> None:
         """Configure the client.
 
@@ -211,9 +267,15 @@ class Client:
                 (default) returns whatever the bank delivered and logs a warning on a
                 mismatch; ``STRICT`` rejects a mismatch before the receipt, leaving the
                 data at the bank.
+            recovery_attempts: How often one upload or download transaction may repeat a
+                step whose answer was lost, or follow a recovery point the bank names
+                (EBICS recovery, spec 5.4). A repeated step stays in the same transaction,
+                so the bank never takes an order twice. ``0`` turns recovery off.
 
         Raises:
-            TypeError: ``version_policy`` is not a :class:`~ebicsclient.VersionPolicy`.
+            TypeError: ``version_policy`` is not a :class:`~ebicsclient.VersionPolicy`, or
+                ``recovery_attempts`` is not an ``int``.
+            ValueError: ``recovery_attempts`` is negative.
         """
         if not isinstance(version_policy, VersionPolicy):
             # A plain "strict" string would compare unequal to VersionPolicy.STRICT by
@@ -221,6 +283,13 @@ class Client:
             raise TypeError(
                 f"version_policy must be a VersionPolicy, got {type(version_policy).__name__}"
             )
+        if isinstance(recovery_attempts, bool) or not isinstance(recovery_attempts, int):
+            raise TypeError(
+                f"recovery_attempts must be an int, got {type(recovery_attempts).__name__}"
+            )
+        if recovery_attempts < 0:
+            raise ValueError(f"recovery_attempts must not be negative, got {recovery_attempts}")
+        self._recovery_attempts = recovery_attempts
         self._bank = bank
         self._user = user
         self._keyring = keyring
@@ -550,27 +619,20 @@ class Client:
         validate: Callable[[bytes], None] | None = None,
         receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE,
     ) -> bytes:
+        # The initialisation is not recovered: without its answer there is no transaction ID,
+        # and nothing is consumed before the receipt, so a caller can simply start again.
         initialisation = h005.parse_download_initialisation_response(
             self._post_verified(initialisation_request, bank_keys)
         )
+        transaction_id = initialisation.transaction_id
+        total = initialisation.num_segments
+        budget = _RecoveryBudget(self._recovery_attempts)
 
         # Order data is one base64 stream split into NumSegments pieces: fetch the rest, in
         # order, driven by the authoritative segment count from the initialisation response.
-        segments = [initialisation.order_data_segment]
-        for number in range(2, initialisation.num_segments + 1):
-            transfer = h005.build_download_transfer_request(
-                self._bank,
-                self._keyring,
-                initialisation.transaction_id,
-                number,
-                last_segment=number == initialisation.num_segments,
-            )
-            segment = h005.parse_download_segment_response(
-                self._post_verified(transfer, bank_keys)
-            )
-            segments.append(segment.order_data_segment)
+        segments = {1: initialisation.order_data_segment}
+        self._fetch_segments(transaction_id, total, segments, 2, bank_keys, budget)
 
-        transaction_id = initialisation.transaction_id
         # Decrypt and validate BEFORE acknowledging: the receipt is what lets the bank
         # consume the data, so nothing is acknowledged until we have safely landed it. Any
         # failure here sends a NEGATIVE receipt, so the bank keeps the data for redelivery
@@ -578,36 +640,99 @@ class Client:
         try:
             # The segments are pieces of a single base64 stream, so join before decoding — a
             # segment boundary need not fall on a 4-character base64 group.
-            encrypted_order_data = base64.b64decode("".join(segments))
+            stream = "".join(segments[number] for number in range(1, total + 1))
+            encrypted_order_data = base64.b64decode(stream)
             order_data = crypto.decrypt_order_data(
                 self._keyring.encryption, initialisation.transaction_key, encrypted_order_data
             )
             if validate is not None:
                 validate(order_data)
         except Exception:
-            self._acknowledge(transaction_id, bank_keys, positive=False)
+            self._acknowledge(transaction_id, total, segments, bank_keys, budget, positive=False)
             raise
 
         # Success. ACKNOWLEDGE consumes the data (positive receipt); KEEP declines it
         # (negative receipt) so the bank keeps it available for a later download.
         positive = receipt_policy is ReceiptPolicy.ACKNOWLEDGE
-        self._acknowledge(transaction_id, bank_keys, positive=positive)
+        self._acknowledge(transaction_id, total, segments, bank_keys, budget, positive=positive)
         logger.info(
             "Download: received %d segment(s) for transaction %s (%s)",
-            initialisation.num_segments,
+            total,
             transaction_id,
             "acknowledged" if positive else "kept — negative receipt",
         )
         return order_data
 
-    def _acknowledge(
-        self, transaction_id: str, bank_keys: BankKeys, *, positive: bool
+    def _fetch_segments(
+        self,
+        transaction_id: str,
+        total: int,
+        segments: dict[int, str],
+        first: int,
+        bank_keys: BankKeys,
+        budget: _RecoveryBudget,
     ) -> None:
-        receipt = h005.build_download_receipt_request(
-            self._bank, self._keyring, transaction_id, positive=positive
-        )
+        # Request segments ``first`` to ``total`` into ``segments``. A request whose answer was
+        # lost is repeated in the same transaction (recovery, spec 5.6.2); a recovery point the
+        # bank names moves the next request back to the segment after it.
+        number = first
+        while number <= total:
+            transfer = h005.build_download_transfer_request(
+                self._bank, self._keyring, transaction_id, number, last_segment=number == total
+            )
+            try:
+                response = self._post_verified(transfer, bank_keys)
+            except EbicsError as error:
+                if _answer_lost(error) and budget.spend(wait=True):
+                    logger.warning(
+                        "Download: no usable answer for segment %d of transaction %s (%s); "
+                        "requesting it again",
+                        number,
+                        transaction_id,
+                        type(error).__name__,
+                    )
+                    continue
+                raise
+            point = h005.download_recovery_point(response, total)
+            if point is not None:
+                if not budget.spend(wait=False):
+                    h005.parse_download_segment_response(response)  # raises the sync as an error
+                number = _next_download_segment(point, total, segments)
+                logger.warning(
+                    "Download: the bank names segment %d of transaction %s as its recovery "
+                    "point; continuing with segment %d",
+                    point,
+                    transaction_id,
+                    number,
+                )
+                continue
+            segment = h005.parse_download_segment_response(response)
+            if segment.segment_number != number:
+                raise ProtocolError(
+                    f"Requested segment {number} of transaction {transaction_id}, the bank sent "
+                    f"segment {segment.segment_number}"
+                )
+            held = segments.get(number)
+            if held is not None and held != segment.order_data_segment:
+                raise ProtocolError(
+                    f"The bank sent different data for segment {number} of transaction "
+                    f"{transaction_id} the second time"
+                )
+            segments[number] = segment.order_data_segment
+            number += 1
+
+    def _acknowledge(
+        self,
+        transaction_id: str,
+        total: int,
+        segments: dict[int, str],
+        bank_keys: BankKeys,
+        budget: _RecoveryBudget,
+        *,
+        positive: bool,
+    ) -> None:
         try:
-            h005.parse_download_receipt_response(self._post_verified(receipt, bank_keys))
+            self._send_receipt(transaction_id, total, segments, bank_keys, budget, positive)
         except Exception:
             if positive:
                 # A failed positive acknowledgement is a real error: the caller must know
@@ -621,6 +746,43 @@ class Client:
                 "the bank should still not have marked the data delivered",
                 transaction_id,
             )
+
+    def _send_receipt(
+        self,
+        transaction_id: str,
+        total: int,
+        segments: dict[int, str],
+        bank_keys: BankKeys,
+        budget: _RecoveryBudget,
+        positive: bool,
+    ) -> None:
+        # A receipt whose answer was lost is sent again (spec 5.6.2). A recovery point means
+        # the bank expects segments first: request them again, then acknowledge.
+        while True:
+            receipt = h005.build_download_receipt_request(
+                self._bank, self._keyring, transaction_id, positive=positive
+            )
+            try:
+                response = self._post_verified(receipt, bank_keys)
+            except EbicsError as error:
+                if _answer_lost(error) and budget.spend(wait=True):
+                    logger.warning(
+                        "Download: no usable answer for the receipt of transaction %s (%s); "
+                        "sending it again",
+                        transaction_id,
+                        type(error).__name__,
+                    )
+                    continue
+                raise
+            point = h005.download_recovery_point(response, total)
+            if point is not None and budget.spend(wait=False):
+                first = _next_download_segment(point, total, segments)
+                self._fetch_segments(transaction_id, total, segments, first, bank_keys, budget)
+                continue
+            # Raises on any code other than the receipt confirmations, including a recovery
+            # point once no attempt is left.
+            h005.parse_download_receipt_response(response)
+            return
 
     def available_order_types(self) -> list[BusinessTransactionFormat]:
         """Download the order types for which the bank currently holds data (HAA).
@@ -915,10 +1077,14 @@ class Client:
             order_data: The order data to upload (e.g. a pain.001 document as bytes).
 
         The bank takes the order once it has the last segment, so only the answer to that
-        segment decides whether the order exists. If the upload fails before it, the bank
-        holds no order and the upload may be repeated. If the last segment was sent but no
-        trustworthy answer came back, :class:`~ebicsclient.errors.UploadUnconfirmedError` is
-        raised: the bank may hold the order, so check before sending it again.
+        segment decides whether the order exists. When the answer to a segment is lost, the
+        client sends the segment again in the same transaction (EBICS recovery, up to the
+        client's ``recovery_attempts``); the bank takes it or names the segments it already
+        holds, and never takes the order twice. If the upload fails before the last segment,
+        the bank holds no order and the upload may be repeated. If the last segment was sent
+        and recovery could not confirm it,
+        :class:`~ebicsclient.errors.UploadUnconfirmedError` is raised: the bank may hold the
+        order, so check before sending it again.
 
         Returns:
             The bank-issued transaction ID for the upload.
@@ -1060,32 +1226,82 @@ class Client:
     ) -> None:
         # Shared by uploads and key changes: ``unconfirmed`` builds the error that says the
         # final segment was sent without a trustworthy answer.
+        #
+        # The answer to the final segment is authoritative: an order is processed only after
+        # the exchange returned 000000 (spec 5.1.3.1), and a key change is processed before
+        # that answer (spec 4.3). The bank takes the order only once it has the last segment,
+        # so a failure before it leaves no order behind (and the old keys in force). A step
+        # whose answer was lost is sent again in the same transaction (recovery, spec 5.5.2):
+        # the bank takes it, or names the last segment it holds, and never takes the order a
+        # second time. Once the final segment went out unanswered, only a 000000 or a
+        # recovery point covering every segment confirms the order.
         segments = payload.order_data_segments
-        for number, segment_data in enumerate(segments, start=1):
-            last_segment = number == len(segments)
+        total = len(segments)
+        budget = _RecoveryBudget(self._recovery_attempts)
+        final_segment_unanswered = False
+        highest_sent = 0
+        number = 1
+        while number <= total:
+            last_segment = number == total
+            highest_sent = max(highest_sent, number)
             transfer = h005.build_upload_transfer_request(
                 self._bank,
                 self._keyring,
                 transaction_id,
                 number,
-                segment_data,
+                segments[number - 1],
                 last_segment=last_segment,
             )
-            if not last_segment:
-                # The bank takes the order only once it has the last segment, so a failure
-                # here leaves no order behind (and, for a key change, the old keys in force):
-                # let it propagate as is.
-                h005.parse_upload_transfer_response(self._post_verified(transfer, bank_keys))
-                continue
-            # The answer to the final segment is authoritative: an order is processed only
-            # after the exchange returned 000000 (spec 5.1.3.1), and a key change is processed
-            # before that answer (spec 4.3). A verified rejection therefore means no order
-            # and no key change; anything short of a verified answer leaves the outcome open.
             try:
-                h005.parse_upload_transfer_response(self._post_verified(transfer, bank_keys))
-            except UnknownReturnCodeError as error:
-                raise unconfirmed() from error
-            except ReturnCodeError:
-                raise
+                response = self._post_verified(transfer, bank_keys)
+                point = h005.upload_recovery_point(response, total)
+                if point is not None and point > highest_sent:
+                    # The bank cannot hold a segment that was never sent: an answer claiming
+                    # it must not confirm anything.
+                    raise ProtocolError(
+                        f"The bank names segment {point} as its recovery point, but only "
+                        f"segments up to {highest_sent} of transaction {transaction_id} were sent"
+                    )
             except EbicsError as error:
-                raise unconfirmed() from error
+                final_segment_unanswered = final_segment_unanswered or last_segment
+                if _answer_lost(error) and budget.spend(wait=True):
+                    logger.warning(
+                        "Upload: no usable answer for segment %d of transaction %s (%s); "
+                        "sending it again",
+                        number,
+                        transaction_id,
+                        type(error).__name__,
+                    )
+                    continue
+                if final_segment_unanswered:
+                    raise unconfirmed() from error
+                raise
+            if point is not None:
+                if point == total:
+                    logger.warning(
+                        "Upload: the bank holds all %d segment(s) of transaction %s",
+                        total,
+                        transaction_id,
+                    )
+                    return
+                if budget.spend(wait=False):
+                    logger.warning(
+                        "Upload: the bank holds %d of %d segment(s) of transaction %s; "
+                        "continuing with segment %d",
+                        point,
+                        total,
+                        transaction_id,
+                        point + 1,
+                    )
+                    number = point + 1
+                    continue
+            try:
+                # Raises on any code other than 000000, including a recovery point once no
+                # attempt is left.
+                h005.parse_upload_transfer_response(response)
+            except ReturnCodeError as error:
+                unknown_on_last = last_segment and isinstance(error, UnknownReturnCodeError)
+                if final_segment_unanswered or unknown_on_last:
+                    raise unconfirmed() from error
+                raise
+            number += 1

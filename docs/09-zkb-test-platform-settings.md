@@ -168,6 +168,23 @@ So the `SCT` channel cannot be validated on this platform, and an unregistered t
 (`SCT / GLB`) is not refused either: here too, `000000` on an upload says nothing about
 processing.
 
+## Recovery (2026-10-27)
+
+The platform supports recovery (HPD `Recovery supported="true"`). Probed with raw requests:
+
+| Request | Answer |
+| --- | --- |
+| upload segment 1 sent again after it was answered | `061101` `EBICS_TX_RECOVERY_SYNC`, `SegmentNumber` 1: the bank holds segment 1 |
+| final upload segment sent again after it was answered | `000000` again, same order ID; the order is booked once |
+| download segment 1 requested again in the transfer phase | served again |
+| download segment 2 of 1 | `061099` `EBICS_INTERNAL_ERROR`; the transaction survives |
+| receipt sent a second time | `091101` `EBICS_TX_UNKNOWN_TXID`: the first receipt ended the transaction |
+
+The client's recovery then ran against the platform with answers discarded after delivery: a
+two-segment simulation upload with the answer to segment 1 lost, and a one-segment upload
+with the answer to its final segment lost. Both finished without an error, and the
+incoming-payments reconciliation found each booked exactly once.
+
 ## How the simulation is driven (validated 2026-07-05)
 
 The test platform separates two facilities, which matters when interpreting results:
