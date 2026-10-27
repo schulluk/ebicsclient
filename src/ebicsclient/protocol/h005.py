@@ -76,6 +76,10 @@ _REVISION = "1"
 _ADMIN_ORDER_TYPE_HPB = "HPB"  # H005 administrative order type for the bank-key download
 _ADMIN_ORDER_TYPE_BTD = "BTD"  # H005 business transaction download
 _ADMIN_ORDER_TYPE_BTU = "BTU"  # H005 business transaction upload
+_ADMIN_ORDER_TYPE_SPR = "SPR"  # suspension of the subscriber's access (spec 4.5)
+# The SPR signature covers a dummy file of one blank, which is never transmitted: SPR carries
+# an ES and no order data (spec 4.5.1, 4.5.2).
+_SUSPENSION_SIGNED_DATA = b" "
 # The order carries an electronic signature (EU) and is authorised within EBICS. The H005 XSD
 # types SignatureFlag as an empty flag, but banks expect the boolean text "true"; validated live.
 _SIGNATURE_FLAG = "true"
@@ -966,21 +970,36 @@ def prepare_upload(
         CryptoError: the order data could not be signed or encrypted.
     """
     transaction_key = crypto.new_transaction_key()
-    signature = crypto.sign_order_data(keyring.signature, order_data)
+    encrypted_stream = base64.b64encode(
+        crypto.encrypt_with_transaction_key(transaction_key, order_data)
+    ).decode("ascii")
+    return _signed_payload(
+        user, keyring, bank_keys, transaction_key, order_data, _split_segments(encrypted_stream)
+    )
+
+
+def _signed_payload(
+    user: User,
+    keyring: Keyring,
+    bank_keys: BankKeys,
+    transaction_key: bytes,
+    signed_data: bytes,
+    order_data_segments: tuple[str, ...],
+) -> UploadPayload:
+    # The A006 signature over ``signed_data``, encrypted with the transaction key, plus the
+    # matching DataDigest; the transaction key itself is wrapped to the bank's E002.
+    signature = crypto.sign_order_data(keyring.signature, signed_data)
     signature_xml = _user_signature_data(user, signature)
     signature_data = base64.b64encode(
         crypto.encrypt_with_transaction_key(transaction_key, signature_xml)
-    ).decode("ascii")
-    encrypted_stream = base64.b64encode(
-        crypto.encrypt_with_transaction_key(transaction_key, order_data)
     ).decode("ascii")
     return UploadPayload(
         wrapped_transaction_key=crypto.encrypt_transaction_key(
             bank_keys.encryption, transaction_key
         ),
-        data_digest=crypto.order_data_digest(order_data),
+        data_digest=crypto.order_data_digest(signed_data),
         signature_data=signature_data,
-        order_data_segments=_split_segments(encrypted_stream),
+        order_data_segments=order_data_segments,
     )
 
 
@@ -1128,6 +1147,70 @@ def build_key_change_initialisation_request(
     return _upload_initialisation_request(
         bank, user, keyring, bank_keys, key_change_order_type(rotation), None, payload
     )
+
+
+def build_suspension_request(
+    bank: Bank, user: User, keyring: Keyring, bank_keys: BankKeys
+) -> bytes:
+    """Build the signed SPR request that suspends the subscriber's access (spec 4.5.2).
+
+    SPR is an upload whose ES file holds only the subscriber's A006 signature over a dummy
+    file of one blank; the dummy file itself is not transmitted, and there is no order data
+    (spec 4.5.1). So the request is the initialisation of an upload with ``NumSegments`` 0
+    (``NumSegmentsType`` is a ``nonNegativeInteger``), the empty ``StandardOrderParams`` and
+    the encrypted signature, under an ``AuthSignature`` made with the X002 key. The bank
+    processes it in this one step and opens no transaction.
+
+    Args:
+        bank: The target bank.
+        user: The subscriber to suspend.
+        keyring: The subscriber's key pairs (the A006 key signs, the X002 key authenticates).
+        bank_keys: The bank's public keys (the E002 key wraps the transaction key).
+
+    Returns:
+        The serialised, signed ``ebicsRequest`` XML.
+
+    Raises:
+        CryptoError: the signature could not be made or encrypted.
+    """
+    payload = _signed_payload(
+        user, keyring, bank_keys, crypto.new_transaction_key(), _SUSPENSION_SIGNED_DATA, ()
+    )
+    return _upload_initialisation_request(
+        bank, user, keyring, bank_keys, _ADMIN_ORDER_TYPE_SPR, None, payload
+    )
+
+
+def parse_suspension_response(response: bytes) -> str | None:
+    """Check the bank's answer to an SPR request and return its order ID, if it named one.
+
+    The bank suspends the subscriber while processing the initialisation, so it returns no
+    transaction ID (spec 4.5.2). A transaction ID in the answer means the bank did not
+    process the suspension in this step, which this client cannot confirm: that fails closed.
+
+    Args:
+        response: The raw ``ebicsResponse`` bytes from the bank.
+
+    Returns:
+        The ``OrderID`` the bank assigned, or ``None`` if the answer carries none.
+
+    Raises:
+        ProtocolError: the response could not be parsed, or the bank opened a transaction.
+        ReturnCodeError: the bank refused the suspension.
+        UnknownReturnCodeError: the bank reported a code outside the client's verified table.
+    """
+    root = _parse(response)
+    _check_return_code(root)
+    header = _child(root, "header")
+    transaction_id = _child(header, "static").findtext(f"{{{NAMESPACE}}}TransactionID")
+    if transaction_id is not None:
+        raise ProtocolError(
+            f"The bank answered the suspension with transaction {transaction_id}, but SPR is "
+            "processed in its initialisation without a transaction (spec 4.5.2); the "
+            "suspension is not confirmed"
+        )
+    order_id = _child(header, "mutable").findtext(f"{{{NAMESPACE}}}OrderID")
+    return order_id or None
 
 
 def _upload_initialisation_request(

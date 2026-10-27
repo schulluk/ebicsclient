@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ebicsResponse xmlns="urn:org:ebics:H005" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" Version="H005" Revision="1" xsi:schemaLocation="urn:org:ebics:H005 ebics_response_H005.xsd">
+    <header authenticate="true">
+        <static/>
+        <mutable>
+            <TransactionPhase>Initialisation</TransactionPhase>
+            <OrderID>N017</OrderID>
+            <ReturnCode>061001</ReturnCode>
+            <ReportText>[EBICS_AUTHENTICATION_FAILED] Authentication signature error</ReportText>
+        </mutable>
+    </header>
+    <AuthSignature>
+        <ds:SignedInfo>
+            <ds:CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/>
+            <ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>
+            <ds:Reference URI="#xpointer(//*[@authenticate='true'])">
+                <ds:Transforms>
+                    <ds:Transform Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/>
+                </ds:Transforms>
+                <ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>
+                <ds:DigestValue>esIyBF4t25MXnEKesRzIgG2UW+iUJpuP1k/ziknKjhQ=</ds:DigestValue>
+            </ds:Reference>
+        </ds:SignedInfo>
+        <ds:SignatureValue>ATYqlU1/fCLwARPWEdITzGSNYwNfSIWayNVfx12t3V6vUyL5ubGCFCSjrmx2yaji4AsQU1H7wf/3O5vb9hkrWYLe7btSa78hzya10qC6WNpYpd8kykfMPQkhNJvIPx8FRlpf6JRWmAh1jpaFy5wD1wpt7W2+Pk72DyGuf2RY93FeMf8p6dq5AnHdqWnQnMU9CHJYHLaa3Zp8UBLMHVn8+Db3+8EMa/KRk9bW7afF0qp4qsLZ5qGll+D7FAyxg01TL/+qQRoWOLqAlxXXWnRKFBrWT/hmBkou5XEKX1Traoq26hlJDGbNNHk1GeY50/k9cFvzGzRFTB0PB40TjyL0JA==</ds:SignatureValue>
+    </AuthSignature>
+    <body>
+        <ReturnCode authenticate="true">000000</ReturnCode>
+        <TimestampBankParameter authenticate="true">2021-05-04T16:16:13.292Z</TimestampBankParameter>
+    </body>
+</ebicsResponse>

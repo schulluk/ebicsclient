@@ -38,7 +38,7 @@ absent, not excluded — unless the **Notes** say otherwise.
 | PUB — change the bank-technical (signature) key | Mandated | ✅ | live | `change_keys(…, KeyRotation.SIGNATURE)`, no letter. The client adopts the new keys only after the bank confirms; an unknown outcome raises `KeyChangeUnconfirmedError` (keep both keyrings). Persisting is the caller's: `rotate_keyring` + the atomic `save_keyring` |
 | HCA — change the authentication + encryption keys | Mandated | ✅ | live | `change_keys(…, KeyRotation.AUTHENTICATION_AND_ENCRYPTION)` (see PUB) |
 | HCS — change all three subscriber keys at once | Mandated | ✅ | live | `change_keys(…, KeyRotation.ALL)` (see PUB) |
-| SPR — suspend / lock the subscriber's access | Mandated | ❌ | | e.g. on suspected key compromise; not run live, since it would lock the test subscriber |
+| SPR — suspend / lock the subscriber's access | Mandated | ✅ | live | `suspend_access()`, e.g. on suspected key compromise (spec 4.5.1). ZKB suspended the test subscriber at once and returned an order ID; INI and HIA with new keys then brought it back without a reset. A lost answer leaves the outcome open and is not repeated automatically; a refused repeat (`061001` at ZKB) does not prove the first one worked |
 | H3K — one-step CA-certificate initialisation | Mandated (optional) | ❌ | | CA profile only; not a priority |
 
 ## Read — downloads

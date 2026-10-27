@@ -63,7 +63,8 @@ round-trip, certificate-profile onboarding, and key rotation — are in
 
 ## What it does
 
-Key ceremony (INI/HIA/HPB) and key rotation without a new letter (PUB/HCA/HCS); statement and
+Key ceremony (INI/HIA/HPB), key rotation without a new letter (PUB/HCA/HCS) and suspending a
+subscriber whose key may be compromised (SPR); statement and
 report downloads (camt.053/052/054, pain.002) with optional dated ranges, each booking resolved
 into its single transactions (references, payer, remittance information), and an opt-in check
 that the bank delivered the requested message version (`VersionPolicy.STRICT`); payment uploads

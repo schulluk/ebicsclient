@@ -185,6 +185,24 @@ two-segment simulation upload with the answer to segment 1 lost, and a one-segme
 with the answer to its final segment lost. Both finished without an error, and the
 incoming-payments reconciliation found each booked exactly once.
 
+## Suspension (SPR, 2026-10-27)
+
+The test subscriber holds the SPR permission (HTD, level `T`), and the platform lets its user
+undo a suspension: the web app's **EBICS-Daten** page has *EBICS-Teilnehmer zurücksetzen*
+(reset, handbook 3.8.3) and *EBICS-Teilnehmer freischalten* (activate after INI and HIA,
+handbook 3.5.1). The run:
+
+| Step | Answer |
+| --- | --- |
+| SPR with the active keys | `000000`, `OrderID` `N016`, no `TransactionID` |
+| HTD with the same keys right after | `061001` `EBICS_AUTHENTICATION_FAILED` |
+| a second SPR | `061001`, with a new `OrderID` |
+| INI and HIA with a new keyring | both accepted (`000000`), no reset needed |
+| *EBICS-Teilnehmer freischalten*, then HPB and HTD with the new keys | succeeded, status `1` |
+
+So the platform suspends synchronously (spec 4.3), answers a suspended subscriber the way it
+answers a wrong key, and admits INI and HIA from "Suspended" (spec 4.4.1.2.1, 4.4.1.2.2).
+
 ## How the simulation is driven (validated 2026-07-05)
 
 The test platform separates two facilities, which matters when interpreting results:

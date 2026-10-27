@@ -1217,6 +1217,55 @@ class Client:
         )
         return transaction_id
 
+    def suspend_access(self) -> str | None:
+        """Suspend this subscriber at the bank (SPR), e.g. when a key may be compromised.
+
+        The spec requires a subscriber who suspects a compromised key to suspend their
+        access to every bank that uses it (spec 4.5.1). SPR does that over EBICS: an upload
+        that carries only the subscriber's A006 signature, authenticated with the X002 key,
+        which the bank processes at once (spec 4.3, 4.5.2). Afterwards the subscriber is
+        "Suspended" and the bank refuses every request it authenticates, so this cannot be
+        undone over EBICS with the same keys: sending orders again needs a new
+        initialisation (INI, HIA, and the letters), with new keys. If a key is lost or
+        damaged, SPR cannot be sent; suspend by telephone instead.
+
+        The outcome is definite only with a verified answer, and the client does not repeat
+        SPR on its own: there is no transaction to recover (spec 4.5.2). After a transport
+        error or an answer that cannot be verified, send it again or ask the bank. A repeated
+        SPR from a suspended subscriber is refused like any of its requests (at ZKB with
+        ``EBICS_AUTHENTICATION_FAILED``, ``061001``), and a wrong key or unknown subscriber is
+        refused the same way, so that refusal does not prove the suspension: confirm it with
+        the bank.
+
+        The bank's keys must already be available (call :meth:`hpb` first).
+
+        Returns:
+            The order ID the bank assigned to the suspension, or ``None`` if it named none.
+
+        Raises:
+            ClientStateError: the bank's keys have not been fetched yet (run HPB first).
+            TransportError: the request could not be delivered, or its answer was lost; the
+                subscriber may or may not be suspended.
+            ProtocolError: the answer could not be parsed or verified, or the bank opened a
+                transaction instead of processing the suspension; it is not confirmed.
+            ReturnCodeError: the bank refused the suspension; this request did not suspend
+                the subscriber. Its subclass ``UnknownReturnCodeError`` names a code outside
+                the client's verified table: treat the outcome as open.
+            CryptoError: the signature could not be made or encrypted.
+        """
+        bank_keys = self._require_bank_keys("Suspension")
+        logger.warning(
+            "SPR: suspending user %s at host %s", self._user.user_id, self._bank.host_id
+        )
+        request = h005.build_suspension_request(self._bank, self._user, self._keyring, bank_keys)
+        order_id = h005.parse_suspension_response(self._post_verified(request, bank_keys))
+        logger.warning(
+            "SPR: the bank suspended user %s; a new initialisation (INI, HIA, letters) is "
+            "needed before it can send orders again",
+            self._user.user_id,
+        )
+        return order_id
+
     def _transfer_segments(
         self,
         transaction_id: str,

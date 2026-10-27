@@ -1060,6 +1060,79 @@ def test_change_keys_adopts_a_new_certificate_provider_only_on_success(
     assert client._certificate_provider is provider
 
 
+def _suspension_response(code: str, bank_keyring: Keyring) -> bytes:
+    # The shape ZKB sent for SPR on 2026-10-27: no TransactionID, an OrderID in the mutable
+    # header (tests/data/spr_response_zkb_sample.xml).
+    return sign_response(
+        (
+            f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static/><mutable>'
+            "<TransactionPhase>Initialisation</TransactionPhase><OrderID>N016</OrderID>"
+            f"<ReturnCode>{code}</ReturnCode><ReportText>report</ReportText></mutable></header>"
+            f"<body><ReturnCode>{code}</ReturnCode></body></ebicsResponse>"
+        ).encode(),
+        bank_keyring,
+    )
+
+
+def test_suspend_access_sends_one_spr_request_and_returns_the_order_id(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    client, transport = _download_client(
+        [_suspension_response("000000", bank_keyring)], keyring, _bank_keys(bank_keyring)
+    )
+    assert client.suspend_access() == "N016"
+    # The bank processes SPR in the initialisation (spec 4.5.2): nothing follows it.
+    (posted,) = transport.posts
+    request = etree.fromstring(posted)
+    assert request.findtext(f".//{{{_NS}}}AdminOrderType") == "SPR"
+    assert request.findtext(f".//{{{_NS}}}NumSegments") == "0"
+    assert crypto.verify_auth_signature(request, keyring.authentication.public_key())
+
+
+def test_suspend_access_raises_when_the_bank_refuses(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # 061001: how ZKB refused a second SPR from the already suspended subscriber.
+    client, _ = _download_client(
+        [_suspension_response("061001", bank_keyring)], keyring, _bank_keys(bank_keyring)
+    )
+    with pytest.raises(ReturnCodeError) as caught:
+        client.suspend_access()
+    assert caught.value.code == "061001"
+
+
+def test_suspend_access_does_not_trust_an_answer_signed_by_another_key(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    other_bank = keys.generate_keyring()
+    client, _ = _download_client(
+        [_suspension_response("000000", other_bank)], keyring, _bank_keys(bank_keyring)
+    )
+    with pytest.raises(ResponseAuthenticationError):
+        client.suspend_access()
+
+
+def test_suspend_access_does_not_repeat_the_request_when_the_answer_is_lost(
+    keyring: Keyring, bank_keyring: Keyring
+) -> None:
+    # No transaction exists to recover, so the outcome stays open and the caller decides,
+    # even with recovery on.
+    lost = TransportError("timed out", retryability=Retryability.TRANSIENT)
+    client, transport = _download_client(
+        [lost], keyring, _bank_keys(bank_keyring), recovery_attempts=2
+    )
+    with pytest.raises(TransportError):
+        client.suspend_access()
+    assert len(transport.posts) == 1
+
+
+def test_suspend_access_requires_hpb_first(keyring: Keyring) -> None:
+    client, transport = _client(_OK_RESPONSE, keyring)
+    with pytest.raises(ClientStateError):
+        client.suspend_access()
+    assert transport.posted is None
+
+
 # ---------------------------------------------------------------------------------------
 # Recovery (spec 5.4, 5.5.2, 5.6.2): a step whose answer was lost is repeated in the same
 # transaction, and a recovery point the bank names (EBICS_TX_RECOVERY_SYNC) is followed.

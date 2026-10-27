@@ -583,7 +583,8 @@ class UploadPayload:
         signature_data: The compressed, encrypted A006 order signature (UserSignatureData), as
             base64 text — carried in the initialisation request.
         order_data_segments: The compressed, encrypted order data as base64 text, split into
-            one or more segments carried by the transfer requests.
+            the segments carried by the transfer requests: one or more, or none for an order
+            that carries only a signature (SPR, spec 4.5.2).
     """
 
     wrapped_transaction_key: bytes

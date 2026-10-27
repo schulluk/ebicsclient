@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ebicsResponse xmlns="urn:org:ebics:H005" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" Version="H005" Revision="1" xsi:schemaLocation="urn:org:ebics:H005 ebics_response_H005.xsd">
+    <header authenticate="true">
+        <static/>
+        <mutable>
+            <TransactionPhase>Initialisation</TransactionPhase>
+            <OrderID>N016</OrderID>
+            <ReturnCode>000000</ReturnCode>
+            <ReportText>[EBICS_OK] OK</ReportText>
+        </mutable>
+    </header>
+    <AuthSignature>
+        <ds:SignedInfo>
+            <ds:CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/>
+            <ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>
+            <ds:Reference URI="#xpointer(//*[@authenticate='true'])">
+                <ds:Transforms>
+                    <ds:Transform Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/>
+                </ds:Transforms>
+                <ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>
+                <ds:DigestValue>W1/l9eRw5IIKoS2qaCLx+fhiY1ATmgxcLDuCChjvaZo=</ds:DigestValue>
+            </ds:Reference>
+        </ds:SignedInfo>
+        <ds:SignatureValue>M9GczCR0KVPOXvNoB47xsAPhnKnLiIlkQYPNn0L6h40v68Y8JL0E/s158OhP+YESHBGYeRIPZ19bkAPWVe5dKhNRkfbW4OaNLE5MC6SKeslxUzLztm/7Td9Jkh/xYAs4Ts0xuK7cG4Uvx8tl8VovfkQAMOoCm3/Mi8D7PZVbcl7S/sLOE5Qm7q0b+IOsJiKZ0QWiR86u6DB8wH4+boZBwSoTCe7LZRGj+sZ1K22AWJuIOxfuGTNjYNCJ9gZeGwZ3oIqsi9r1E1NRKks3szkoNPMckpP5iVU0Ti9rfH+by8TZzC8lLAWKQ3NkWjTsPYmtoOENlES/A+m1543jrIi6VQ==</ds:SignatureValue>
+    </AuthSignature>
+    <body>
+        <ReturnCode authenticate="true">000000</ReturnCode>
+        <TimestampBankParameter authenticate="true">2021-05-04T16:16:13.292Z</TimestampBankParameter>
+    </body>
+</ebicsResponse>

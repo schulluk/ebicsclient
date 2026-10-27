@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
-from ebicsclient import experimental, keys
+from ebicsclient import crypto, experimental, keys
 from ebicsclient.models import (
     CAMT_053,
     PAIN_001,
@@ -214,6 +214,31 @@ def test_key_change_initialisation_request_validates(
         bank, user, keyring, bank_keys, rotation, payload
     )
     _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
+
+
+def test_suspension_request_validates(bank: Bank, user: User, keyring: Keyring) -> None:
+    # SPR has no order data: NumSegments 0, which NumSegmentsType (a nonNegativeInteger)
+    # admits, and an ES file the bank decrypts to an S002 UserSignatureData.
+    bank_keyring = keys.generate_keyring()
+    request = h005.build_suspension_request(bank, user, keyring, _bank_keys(bank_keyring))
+    document = etree.fromstring(request)
+    _assert_valid(_schema("ebics_request_H005.xsd"), document)
+    transaction_key = document.findtext(f".//{{{_NS}}}TransactionKey")
+    signature_data = document.findtext(f".//{{{_NS}}}SignatureData")
+    assert transaction_key is not None and signature_data is not None
+    signature_file = crypto.decrypt_order_data(
+        bank_keyring.encryption, base64.b64decode(transaction_key), base64.b64decode(signature_data)
+    )
+    _assert_valid(_schema("ebics_signature_S002.xsd"), etree.fromstring(signature_file))
+
+
+@pytest.mark.parametrize(
+    "fixture", ["spr_response_zkb_sample.xml", "spr_suspended_response_zkb_sample.xml"]
+)
+def test_suspension_response_fixtures_validate(fixture: str) -> None:
+    # ZKB's real answers to SPR: the parser tests rely on their shape.
+    document = etree.parse(str(Path(__file__).parent / "data" / fixture))
+    _assert_valid(_schema("ebics_response_H005.xsd"), document.getroot())
 
 
 @pytest.mark.parametrize(

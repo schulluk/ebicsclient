@@ -47,6 +47,11 @@ and 1.3.1 were never published.
   `Client(recovery_attempts=…)` limits the repetitions per transaction (default 2; `0`
   turns recovery off). Validated live against the ZKB test platform for uploads; download
   recovery of several segments is tested offline only.
+- `Client.suspend_access()` sends SPR, which suspends the subscriber at the bank, for
+  example when a key may be compromised, and returns the bank's order ID. Sending orders
+  again then needs a new initialisation with new keys. Validated live against the ZKB test
+  platform: the subscriber was suspended at once, and INI and HIA with new keys brought it
+  back.
 - Python 3.15 is now supported and tested in CI, like 3.11 to 3.14.
 
 ### Changed

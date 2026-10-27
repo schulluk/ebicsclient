@@ -1145,3 +1145,105 @@ def test_key_change_initialisation_request_is_an_admin_upload_signed_with_the_cu
         padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
         hashes.SHA256(),
     )
+
+
+def test_suspension_request_carries_only_a_signature_over_one_blank(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    bank_keyring = keys.generate_keyring()
+    root = etree.fromstring(
+        h005.build_suspension_request(bank, user, keyring, _bank_keys_from(bank_keyring))
+    )
+    assert root.findtext(f".//{{{_NS}}}AdminOrderType") == "SPR"
+    order_params = root.find(f".//{{{_NS}}}StandardOrderParams")
+    assert order_params is not None and len(order_params) == 0
+    assert root.find(f".//{{{_NS}}}BTUOrderParams") is None
+    assert root.findtext(f".//{{{_NS}}}TransactionPhase") == "Initialisation"
+    # Spec 4.5.1: no order data, so no segment to transfer either.
+    assert root.findtext(f".//{{{_NS}}}NumSegments") == "0"
+    assert root.find(f".//{{{_NS}}}OrderData") is None
+    assert root.find(f".//{{{_NS}}}OrderID") is None
+    assert crypto.verify_auth_signature(root, keyring.authentication.public_key())
+
+    # The ES covers a dummy file of one blank (spec 4.5.1, 4.5.2), and so does the DataDigest.
+    blank_digest = hashlib.sha256(b" ").digest()
+    data_digest = root.find(f".//{{{_NS}}}DataDigest")
+    assert data_digest is not None
+    assert data_digest.get("SignatureVersion") == "A006"
+    assert data_digest.text == base64.b64encode(blank_digest).decode("ascii")
+    transaction_key = root.findtext(f".//{{{_NS}}}TransactionKey")
+    signature_data = root.findtext(f".//{{{_NS}}}SignatureData")
+    assert transaction_key is not None and signature_data is not None
+    signature_root = etree.fromstring(
+        crypto.decrypt_order_data(
+            bank_keyring.encryption,
+            base64.b64decode(transaction_key),
+            base64.b64decode(signature_data),
+        )
+    )
+    assert signature_root.findtext(f".//{{{_S002}}}PartnerID") == user.partner_id
+    assert signature_root.findtext(f".//{{{_S002}}}UserID") == user.user_id
+    signature_value = signature_root.findtext(f".//{{{_S002}}}SignatureValue")
+    assert signature_value is not None
+    keyring.signature.public_key().verify(
+        base64.b64decode(signature_value),
+        blank_digest,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
+        hashes.SHA256(),
+    )
+
+
+def _suspension_response(code: str, *, static: str = "", order_id: str | None = None) -> bytes:
+    order = f"<OrderID>{order_id}</OrderID>" if order_id is not None else ""
+    return (
+        f'<ebicsResponse xmlns="{_NS}"><header authenticate="true"><static>{static}</static>'
+        f"<mutable><TransactionPhase>Initialisation</TransactionPhase>{order}"
+        f"<ReturnCode>{code}</ReturnCode><ReportText>report</ReportText></mutable></header>"
+        f"<body><ReturnCode>{code}</ReturnCode></body></ebicsResponse>"
+    ).encode()
+
+
+def test_parse_suspension_response_returns_the_order_id() -> None:
+    assert h005.parse_suspension_response(_suspension_response("000000", order_id="A0B1")) == (
+        "A0B1"
+    )
+
+
+def test_parse_suspension_response_accepts_an_answer_without_an_order_id() -> None:
+    assert h005.parse_suspension_response(_suspension_response("000000")) is None
+
+
+def test_parse_suspension_response_raises_when_the_bank_refuses() -> None:
+    with pytest.raises(ReturnCodeError) as caught:
+        h005.parse_suspension_response(_suspension_response("091002"))
+    assert caught.value.code == "091002"
+    assert not isinstance(caught.value, UnknownReturnCodeError)
+
+
+def test_parse_suspension_response_labels_an_unknown_code() -> None:
+    with pytest.raises(UnknownReturnCodeError):
+        h005.parse_suspension_response(_suspension_response("091010"))
+
+
+def test_parse_suspension_response_does_not_confirm_an_opened_transaction() -> None:
+    # The bank processes SPR in the initialisation (spec 4.5.2); a transaction means it did
+    # not, and the suspension must not be reported as done.
+    response = _suspension_response("000000", static=f"<TransactionID>{'E' * 32}</TransactionID>")
+    with pytest.raises(ProtocolError, match="not confirmed"):
+        h005.parse_suspension_response(response)
+
+
+def test_parse_suspension_response_reads_the_real_zkb_answer() -> None:
+    # ZKB's answer to SPR on 2026-10-27: 000000, an OrderID, no TransactionID.
+    response = (Path(__file__).parent / "data" / "spr_response_zkb_sample.xml").read_bytes()
+    assert h005.parse_suspension_response(response) == "N016"
+
+
+def test_parse_suspension_response_refuses_the_real_answer_for_a_suspended_subscriber() -> None:
+    # ZKB's answer to a second SPR after the suspension: refused, though with an OrderID.
+    response = (
+        Path(__file__).parent / "data" / "spr_suspended_response_zkb_sample.xml"
+    ).read_bytes()
+    with pytest.raises(ReturnCodeError) as caught:
+        h005.parse_suspension_response(response)
+    assert caught.value.code == "061001"

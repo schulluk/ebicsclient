@@ -58,6 +58,20 @@ unknown: keep both files until you know which keys the bank holds. Any other err
 bank kept the old keys — delete the successor. `examples/zkb_handshake.py pub|hca|hcs` runs
 exactly this sequence; all three were validated live on 2026-10-26.
 
+### Suspending the subscriber (SPR)
+
+If a key may be compromised, the subscriber must suspend its access at every bank that uses
+it (spec 4.5.1). `client.suspend_access()` sends SPR, signed and authenticated with the current
+keys, and returns the bank's order ID. The bank suspends at once: every later request with
+those keys is refused (at ZKB with `061001 EBICS_AUTHENTICATION_FAILED`). If a key is lost or
+damaged, SPR cannot be sent; suspend by telephone instead.
+
+To come back, initialise again with **new** keys: `generate`, `ini` and `hia` (both must return
+`SUBMITTED`), then the letters and the bank's activation, then `hpb`. The spec admits INI and HIA
+in the state "Suspended", so no reset is needed. Validated live on 2026-10-27; on the test
+platform, the button *EBICS-Teilnehmer freischalten* in the web app (Einstellungen → EBICS-Daten)
+stands in for the letters.
+
 ### Re-initialisation (changed keys or certificates)
 
 Once INI/HIA have been accepted, the subscriber is in the *Initialised* state and the bank
