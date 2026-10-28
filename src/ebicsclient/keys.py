@@ -1,9 +1,11 @@
-"""RSA key-pair generation, keyring serialisation, and EBICS public-key hashes.
+"""RSA key-pair generation, keyring serialisation, certificates, and EBICS key hashes.
 
 A subscriber's three RSA key pairs (A006 signature, X002 authentication, E002
-encryption) are generated here, serialised to an encrypted byte string, and reduced
-to the SHA-256 public-key hashes that appear on the initialisation letter and are
-checked when the bank's keys are retrieved (HPB).
+encryption) are generated here, serialised to an encrypted byte string, and wrapped in
+the deterministic self-signed certificates whose SHA-256 hashes the EBICS 3.0
+initialisation letters print. Both hash forms a bank publishes for its own keys, the
+EBICS 2.x public-key hash and the certificate hash, are computed here as well, for the
+comparison after the bank's keys are retrieved (HPB).
 
 Serialisation is kept separate from storage: :func:`serialize_keyring` /
 :func:`deserialize_keyring` move between a keyring and encrypted bytes, and the caller
@@ -330,13 +332,16 @@ def bank_key_hashes(bank_keys: BankKeys) -> BankKeyHashes:
 
 
 def public_key_hash(public_key: rsa.RSAPublicKey) -> bytes:
-    """Compute the EBICS SHA-256 hash of an RSA public key.
+    """Compute the EBICS SHA-256 hash of an RSA public key (the EBICS 2.x form).
 
     EBICS represents the public key as the lowercase, leading-zero-stripped
     hexadecimal of the exponent and modulus joined by a single space — for example
-    ``"10001 b8f1..."`` — and takes the SHA-256 digest of those ASCII bytes. The
-    result identifies the key on the initialisation letter and is compared against
-    the bank's published hashes during HPB.
+    ``"10001 b8f1..."`` — and takes the SHA-256 digest of those ASCII bytes. EBICS 3.0
+    keeps this form only for a key used without a certificate (spec 11.3.2.2); the
+    initialisation letters print the certificate hash instead
+    (:func:`certificate_fingerprint`). Banks still publish their bank-key hashes in this
+    form (ZKB's "mit Schlüsseln" values), so HPB pinning compares it alongside the
+    certificate hash, and a bank key delivered bare is named by it in every request.
 
     Args:
         public_key: The RSA public key to hash.

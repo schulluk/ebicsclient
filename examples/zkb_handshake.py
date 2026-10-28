@@ -11,7 +11,8 @@ Steps, matching the EBICS initialisation ceremony (see docs/05, docs/07):
     hia        submit the authentication and encryption public keys (X002, E002)
     letter     render the initialisation letter to sign and send to the bank
     hpb        download the bank's public keys and verify their hashes
-    hashes     print your own public-key hashes (what the letter certifies)
+    hashes     print your own key hashes: the certificate hashes the letter carries, and
+               the public-key form
     download   fetch the EOP/camt.053 statements and print their closing balances
     upload     upload a pain.001 payment file (path in EBICS_UPLOAD_PATH)
     pain002    fetch the pain.002 payment status report(s) in the BTF form the bank's HTD
@@ -73,6 +74,7 @@ from ebicsclient import (
     BankKeyMismatchError,
     BankKeys,
     BusinessTransactionFormat,
+    CertificateUsage,
     Client,
     InitializationState,
     KeyChangeUnconfirmedError,
@@ -81,6 +83,7 @@ from ebicsclient import (
     User,
     certificate_fingerprint,
     generate_keyring,
+    generate_self_signed_certificate,
     load_keyring,
     public_key_hash,
     rotate_keyring,
@@ -412,13 +415,27 @@ def _load_keyring() -> Keyring:
 
 
 def _print_own_hashes(keyring: Keyring) -> None:
-    print("Your public-key hashes (these appear on the initialisation letter):")
-    for label, private_key in (
-        ("A006 signature     ", keyring.signature),
-        ("X002 authentication", keyring.authentication),
-        ("E002 encryption    ", keyring.encryption),
+    """Print the subscriber's key hashes in both forms.
+
+    The EBICS 3.0 initialisation letter carries the SHA-256 of each key's certificate in DER
+    form (spec 4.4.1.2.3). This script uses the client's default self-signed certificates,
+    which are deterministic for a key and User ID, so the same hashes are reproduced here. The
+    public-key hash is the EBICS 2.x form, which some bank portals still display.
+    """
+    user_id = os.environ.get("EBICS_USER_ID")
+    if user_id is None:
+        print("(set EBICS_USER_ID to see the certificate hashes the initialisation letter carries)")
+    print("Your key hashes (the letter carries the certificate hashes):")
+    for label, usage, private_key in (
+        ("A006 signature     ", CertificateUsage.SIGNATURE, keyring.signature),
+        ("X002 authentication", CertificateUsage.AUTHENTICATION, keyring.authentication),
+        ("E002 encryption    ", CertificateUsage.ENCRYPTION, keyring.encryption),
     ):
-        print(f"  {label}: {_grouped(public_key_hash(private_key.public_key()))}")
+        print(f"  {label}:")
+        if user_id is not None:
+            certificate = generate_self_signed_certificate(private_key, user_id, usage)
+            print(f"    certificate hash {_grouped(certificate_fingerprint(certificate))}")
+        print(f"    public-key hash  {_grouped(public_key_hash(private_key.public_key()))}")
 
 
 def _report_hash(

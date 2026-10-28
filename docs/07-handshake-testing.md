@@ -29,14 +29,19 @@ EBICS_USER_ID=<test User ID>
 EBICS_KEYRING_PATH=../local/test-keyring.json
 EBICS_KEYRING_PASSPHRASE=<a passphrase you choose>
 
-# Verify HPB against the bank-key hashes ZKB publishes for the "mit Schlüsseln" profile.
+# Verify HPB against the bank-key hashes ZKB publishes. Either published form pins the keys:
+# the "mit Schlüsseln" public-key hash or the "mit Zertifikaten" certificate hash.
 EBICS_BANK_X002_HASH=<from ZKB>
 EBICS_BANK_E002_HASH=<from ZKB>
 ```
 
-> **Profile.** ZKB offers EBICS 3.0 **"mit Schlüsseln"** (self-signed keys — what this client
-> implements) and **"mit Zertifikaten"** (CA certificates); each has *different* bank-key hashes.
-> Use the "mit Schlüsseln" hashes.
+> **Profile.** ZKB offers EBICS 3.0 **"mit Schlüsseln"** (self-signed subscriber certificates —
+> this client's default) and **"mit Zertifikaten"** (CA-issued certificates), and publishes
+> bank-key hashes for each. `Client.hpb(pinned=…)` compares a pinned value with the public-key
+> hash of the delivered key *and* with the hash of the certificate HPB delivered for it, so
+> either published value works; on the test platform the two values are the two hash forms of
+> one bank key ([docs/05](05-zkb-onboarding.md)). Register for the profile that matches your
+> subscriber certificates — with the default self-signed ones, "mit Schlüsseln".
 >
 > **Download BTF.** The test platform's subscriber configuration lists the Business Transaction
 > Formats it serves. The `download` step below uses the production `EOP/camt.053` BTF

@@ -95,8 +95,10 @@ and 1.3.1 were never published.
   public-key hash only. `bank_key_hashes()` still returns the public-key form, so stored
   pins stay valid, and the comparison now runs in constant time (`hmac.compare_digest`).
   The `hpb` step of `examples/zkb_handshake.py` prints both forms of each bank key's hash
-  and reports which one the expected value matched. Validated live against the ZKB test
-  platform: an HPB pinned to the certificate hash ZKB publishes for it was accepted.
+  and reports which one the expected value matched; its `hashes` step prints the subscriber's
+  own certificate hashes, the values the initialisation letter carries, next to the public-key
+  form it printed before. Validated live against the ZKB test platform: an HPB pinned to the
+  certificate hash ZKB publishes for it was accepted.
 - A download fails closed with `ProtocolError` when the bank answers a segment request with
   another segment than the one requested, or sends different data for a segment the second
   time.
