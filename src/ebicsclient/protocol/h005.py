@@ -32,6 +32,7 @@ from ebicsclient.certificates import (
 from ebicsclient.errors import (
     CryptoError,
     ProtocolError,
+    ReceiptMismatchError,
     ResponseAuthenticationError,
     ReturnCodeError,
     UnknownReturnCodeError,
@@ -80,18 +81,20 @@ _ADMIN_ORDER_TYPE_SPR = "SPR"  # suspension of the subscriber's access (spec 4.5
 # The SPR signature covers a dummy file of one blank, which is never transmitted: SPR carries
 # an ES and no order data (spec 4.5.1, 4.5.2).
 _SUSPENSION_SIGNED_DATA = b" "
-# The order carries an electronic signature (EU) and is authorised within EBICS. The H005 XSD
-# types SignatureFlag as an empty flag, but banks expect the boolean text "true"; validated live.
-_SIGNATURE_FLAG = "true"
 # Cap each order-data segment at ~1 MB of base64 text, per the EBICS segmentation limit.
 _MAX_SEGMENT_CHARS = 1_000_000
 _SECURITY_MEDIUM = "0000"
 _OK_RETURN_CODE = "000000"
-# The bank confirms a receipt with a postprocess code: 011000 EBICS_DOWNLOAD_POSTPROCESS_DONE
-# for a positive acknowledgement (validated live on ZKB), 011001 EBICS_DOWNLOAD_POSTPROCESS_SKIPPED
-# for a negative one (spec 5.6.1.2.2). Both confirm the receipt was accepted — the polarity is
-# set by what the client sent, not by which code comes back — so both count as success here.
-_RECEIPT_OK_CODES = frozenset({"000000", "011000", "011001"})
+# The bank confirms a receipt with the postprocess code of the receipt's polarity (spec
+# 5.6.1.2.2; Annex 1): 011000 EBICS_DOWNLOAD_POSTPROCESS_DONE after a positive one, the data
+# now marked delivered; 011001 EBICS_DOWNLOAD_POSTPROCESS_SKIPPED after a negative one, the
+# data left available. The plain 000000 is taken after either. The code of the other polarity
+# means the bank did the opposite of what the receipt asked and raises ReceiptMismatchError.
+_POSTPROCESS_DONE = "011000"
+_POSTPROCESS_SKIPPED = "011001"
+_RECEIPT_CONFIRMATIONS = frozenset({_POSTPROCESS_DONE, _POSTPROCESS_SKIPPED})
+_POSITIVE_RECEIPT_OK_CODES = frozenset({_OK_RETURN_CODE, _POSTPROCESS_DONE})
+_NEGATIVE_RECEIPT_OK_CODES = frozenset({_OK_RETURN_CODE, _POSTPROCESS_SKIPPED})
 # EBICS_TX_RECOVERY_SYNC: the bank names its recovery point instead of taking the step
 # (spec 5.5.2, 5.6.2; Annex 1).
 _RECOVERY_SYNC = "061101"
@@ -104,7 +107,7 @@ _RECOVERY_SYNC = "061101"
 _KNOWN_RETURN_CODES = {
     "000000": "EBICS_OK",  # observed live
     "011000": "EBICS_DOWNLOAD_POSTPROCESS_DONE",  # observed live (positive receipt ack)
-    "011001": "EBICS_DOWNLOAD_POSTPROCESS_SKIPPED",  # spec counterpart of 011000
+    "011001": "EBICS_DOWNLOAD_POSTPROCESS_SKIPPED",  # observed live (negative receipt ack)
     "011101": "EBICS_TX_SEGMENT_NUMBER_UNDERRUN",  # Annex 1
     "061001": "EBICS_AUTHENTICATION_FAILED",  # EBICS spec
     "061002": "EBICS_INVALID_REQUEST",  # EBICS spec
@@ -657,14 +660,18 @@ def _business_transaction_format(service: etree._Element) -> BusinessTransaction
     if service_name is None or message is None or message.text is None:
         raise ProtocolError("A <Service> entry is missing its ServiceName or MsgName")
     container = service.find(f"{{{NAMESPACE}}}Container")
-    return BusinessTransactionFormat(
-        service_name=service_name,
-        message_name=message.text,
-        scope=service.findtext(f"{{{NAMESPACE}}}Scope"),
-        message_version=message.get("version"),
-        container=container.get("containerType") if container is not None else None,
-        service_option=service.findtext(f"{{{NAMESPACE}}}ServiceOption"),
-    )
+    try:
+        return BusinessTransactionFormat(
+            service_name=service_name,
+            message_name=message.text,
+            scope=service.findtext(f"{{{NAMESPACE}}}Scope"),
+            message_version=message.get("version"),
+            container=container.get("containerType") if container is not None else None,
+            service_option=service.findtext(f"{{{NAMESPACE}}}ServiceOption"),
+        )
+    except ValueError as error:
+        # The bank's registry is bound by the same schema as the client's requests.
+        raise ProtocolError(f"A <Service> entry is outside the H005 schema: {error}") from error
 
 
 def verify_response_signature(
@@ -1315,7 +1322,11 @@ def _append_btu_order_params(order_details: etree._Element, btf: BusinessTransac
     message = _text(service, "MsgName", btf.message_name)
     if btf.message_version is not None:
         message.set("version", btf.message_version)
-    _text(params, "SignatureFlag", _SIGNATURE_FLAG)
+    # The order carries an electronic signature and is authorised within EBICS. SignatureFlag
+    # is an empty element (SignatureFlagType restricts FlagAttribType, ebics_orders_H005.xsd):
+    # its presence is the value ("no presence means false", spec 5.5.1.1.3). Until 2026-10-28
+    # it carried the text "true", which ZKB and PostFinance accepted but the schema does not.
+    etree.SubElement(params, etree.QName(NAMESPACE, "SignatureFlag"))
 
 
 def build_upload_transfer_request(
@@ -1352,25 +1363,38 @@ def build_upload_transfer_request(
     return _serialize(root)
 
 
-def parse_download_receipt_response(response: bytes) -> None:
-    """Check a download-receipt response, accepting the positive-acknowledgement code.
+def parse_download_receipt_response(response: bytes, *, positive: bool) -> None:
+    """Check the bank's answer to a download receipt against the receipt that was sent.
 
-    The bank answers a positive receipt with ``011000`` (EBICS_DOWNLOAD_POSTPROCESS_DONE),
-    which confirms the download was marked delivered — a success, not an error. Any other
-    non-OK code is raised.
+    The bank confirms a positive receipt with ``011000`` (EBICS_DOWNLOAD_POSTPROCESS_DONE:
+    the data is marked delivered) and a negative one with ``011001``
+    (EBICS_DOWNLOAD_POSTPROCESS_SKIPPED: the data stays available), EBICS 3.0 spec
+    5.6.1.2.2. The plain ``000000`` is accepted after either. The confirmation of the other
+    polarity raises :class:`~ebicsclient.ReceiptMismatchError`: the bank then did the
+    opposite of what the receipt asked.
 
     Args:
         response: The raw ``ebicsResponse`` bytes from the bank.
+        positive: Whether the receipt sent was positive (``ReceiptCode`` 0).
 
     Raises:
         ProtocolError: the response could not be parsed, carries no return code, or
             carries an empty one.
+        ReceiptMismatchError: the bank confirmed the other polarity.
         ReturnCodeError: the bank reported a known code that is neither OK nor the
-            positive receipt acknowledgement.
+            confirmation of this receipt.
         UnknownReturnCodeError: the bank reported a code outside the client's verified
             table (a failure, explicitly labelled unverified).
     """
-    _check_return_codes(_parse(response), _RECEIPT_OK_CODES)
+    root = _parse(response)
+    try:
+        _check_return_codes(
+            root, _POSITIVE_RECEIPT_OK_CODES if positive else _NEGATIVE_RECEIPT_OK_CODES
+        )
+    except ReturnCodeError as error:
+        if error.code in _RECEIPT_CONFIRMATIONS:
+            raise ReceiptMismatchError(error.code, error.text, positive=positive) from None
+        raise
 
 
 def parse_upload_initialisation_response(response: bytes) -> str:

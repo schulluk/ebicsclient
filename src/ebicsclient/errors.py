@@ -294,3 +294,48 @@ class UnknownReturnCodeError(ReturnCodeError):
             f"Unknown EBICS return code {code}{detail} — failing closed; verify the code "
             f"against the EBICS specification and the bank's documentation",
         )
+
+
+class ReceiptMismatchError(ReturnCodeError):
+    """The bank confirmed the opposite of the receipt the client sent for a download.
+
+    A download ends with a receipt. The bank answers a positive receipt (``ReceiptCode`` 0)
+    with ``011000`` EBICS_DOWNLOAD_POSTPROCESS_DONE, the data now marked delivered, and a
+    negative receipt (``ReceiptCode`` 1) with ``011001`` EBICS_DOWNLOAD_POSTPROCESS_SKIPPED,
+    the data left available (EBICS 3.0 spec 5.6.1.2.2). The other code means the bank did
+    the opposite of what the receipt asked:
+
+    - ``011001`` after a positive receipt: the data was not marked delivered, so the bank
+      may serve the same data again. The download raises although its data arrived.
+    - ``011000`` after a negative receipt: the bank marked the data delivered although the
+      client declined it, so it will not serve that data again. After
+      :attr:`~ebicsclient.ReceiptPolicy.KEEP` the download raises; after a failed
+      validation the validation error is raised, carrying this message as a note.
+
+    Args:
+        code: The confirmation code the bank returned.
+        text: The bank's report text, if it supplied one.
+        positive: Whether the receipt sent was positive.
+
+    Attributes:
+        positive: Whether the receipt sent was positive (``ReceiptCode`` 0).
+    """
+
+    def __init__(self, code: str, text: str | None = None, *, positive: bool) -> None:
+        self.code = code
+        self.text = text
+        self.positive = positive
+        detail = f" ({text})" if text is not None else ""
+        if positive:
+            receipt = "positive"
+            consequence = "did not mark the data delivered, so it may serve the same data again"
+        else:
+            receipt = "negative"
+            consequence = (
+                "marked the data delivered although the receipt declined it, so it will not "
+                "serve that data again"
+            )
+        # Bypass ReturnCodeError.__init__ so the message names the receipt and the consequence.
+        ProtocolError.__init__(
+            self, f"The bank answered the {receipt} receipt with {code}{detail}: it {consequence}"
+        )

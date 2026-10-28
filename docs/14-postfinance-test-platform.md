@@ -30,6 +30,8 @@ far our access is validated.
 | downloads after the upload | camt.053, pain.002, camt.054 and the `XTD` archive fetched and parsed (round-trip section below); the library's container-less `PAIN_002` was refused with `091005` |
 | second upload (same payments, no `Dbtr/PstlAdr`), fetched with the typed methods | order `N003`; `download_payment_status_reports(PAIN_002_ZIP)`, `download_statements()` and `download_booking_advices()` all served; the statement opened at 500 000.00 again (*Kontostand beibehalten*); protocol without hints |
 | third upload through the handshake runner (`upload`, then `pain002`) | order `N004`; the `pain002` step read the ZIP form from HTD and fetched both reports |
+| fourth upload, `SignatureFlag` as the empty element the schema defines | order `N005`; HAC logs `TS01`, `DS01` (signature correct) and `ORDER_HAC_FINAL_POS`; pain.002 `ACCP` for both blocks |
+| HAC with `KEEP`, then with `ACKNOWLEDGE` | the negative receipt answered `011001 EBICS_DOWNLOAD_POSTPROCESS_SKIPPED`, the positive one `011000 EBICS_DOWNLOAD_POSTPROCESS_DONE`, each in the header with `000000` in the body; the kept log came again, one entry longer |
 
 These runs used the working tree of 2026-10-28, which already sends the bank-key digests in the
 certificate-DER form of EBICS 3.0 (the uncommitted change behind the ledger's `BankPubKeyDigests`
@@ -332,15 +334,17 @@ QRR mit SCOR* off).
 | End-of-day statement download | `EOP / CH / camt.053 / 08 / ZIP` | `download_statements()` | ✅ live (2026-10-28, three runs: balances reconcile, one collective debit per payment block; the third fetched with the explicit `CAMT_053` argument) |
 | Intraday report | `STM / CH / camt.052 / 08 / ZIP` | `download_intraday_statements()` | ⏳ needs *Intraday-Kontobewegungen* enabled; `download_intraday_statements(CAMT_052)` answered `090005`, so the tuple is registered and merely empty |
 | Booking advices | `REP / CH / camt.054 / 08 / ZIP` (Z54) | `download_booking_advices()` | ✅ live (2026-10-28, two runs: four notifications in version 08, single transactions with references, creditor and remittance text) |
-| pain.001 upload | `MCT / CH / pain.001 / 09` | `client.upload(PAIN_001, …)` | ✅ live (2026-10-28: accepted, processed, booked) |
+| pain.001 upload | `MCT / CH / pain.001 / 09` | `client.upload(PAIN_001, …)` | ✅ live (2026-10-28: accepted, processed, booked; the fourth run with `SignatureFlag` as the schema's empty element) |
+| Receipt answers by polarity | `011000` after a positive, `011001` after a negative receipt | `parse_download_receipt_response(…, positive=…)`, `ReceiptMismatchError` | ✅ live (2026-10-28: HAC with `KEEP` and with `ACKNOWLEDGE`) |
+| HAC customer acknowledgement | administrative order `HAC` | `customer_acknowledgement()` | ✅ live (2026-10-28: 49 entries kept, 50 taken; each upload logs `TS01`, `DS01`, `ORDER_HAC_FINAL_POS`; each download `TS01`) |
 | pain.002 back | `PSR / CH / pain.002 / 10 / ZIP` | `download_payment_status_reports(PAIN_002_ZIP)` | ✅ live (2026-10-28, two runs: one report per payment block, `ACCP`) |
 | pain.002 with the default `PAIN_002` | `PSR / CH / pain.002 / 10`, no container | `download_payment_status_reports()` | ❌ `091005 EBICS_INVALID_ORDER_IDENTIFIER` on both runs: ZKB's registration, which PostFinance refuses — pass `PAIN_002_ZIP` here |
 | Test-platform result archive | `OTH / BIL / CH002LME / msc / ZIP` (XTD) | `client.download(…)` with a hand-built BTF | ✅ live (2026-10-28: one flat ZIP with the protocol, every message and the uploaded file) |
 | CH-DD direct debit (pain.008) | `DDD / BIL / CH001COR \| CH001B2B / pain.008 / 02` | — (no constant) | ⬜ out of scope; the first place a direct debit could be tested |
 | QRR/ASR simulation input (CSV) | `OTH / BIL / CH002LMF / csv` | — (the ZKB tool does not fit) | ⬜ |
-| Bank-side A006 verification | uploads accepted "ohne Unterschrift" | — | ❓ unknown whether a wrong signature is ever detected |
+| Bank-side A006 verification | uploads accepted "ohne Unterschrift" | — | 🟡 HAC logs `DS01` (signature correct) for every upload, so the platform verifies the signature it gets; whether a wrong one is rejected has not been probed |
 
-**Legend:** ✅ verified · ⏳ implemented, live-verification pending · ❌ fails at this bank · ⬜ not started / out of scope · ❓ unknown.
+**Legend:** ✅ verified · 🟡 partly verified · ⏳ implemented, live-verification pending · ❌ fails at this bank · ⬜ not started / out of scope.
 
 ## Next steps, in order
 
@@ -351,8 +355,9 @@ QRR mit SCOR* off).
 
 ## Open items
 
-- Does the platform verify a supplied A006 signature at all? HAC is registered, so a
-  wrong-signature probe can be judged by the customer acknowledgement, as at ZKB.
+- Does the platform reject a wrong A006 signature? It verifies the signature it gets (HAC
+  logs `DS01` for every upload); a wrong-signature probe, judged by the customer
+  acknowledgement as at ZKB, has not been run.
 - Is the technical pain.002 of the file-transfer channels also delivered over EBICS?
 - Does the platform reject a foreign debtor agent BIC, as ZKB does ("Multibanking ist nicht
   zulässig")? `POFICHBEXXX` with a GB debtor IBAN went through; a foreign BIC has not been tried.

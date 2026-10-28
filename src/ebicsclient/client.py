@@ -30,6 +30,7 @@ from ebicsclient.errors import (
     MessageFormatError,
     MessageVersionMismatchError,
     ProtocolError,
+    ReceiptMismatchError,
     Retryability,
     ReturnCodeError,
     TransportError,
@@ -720,8 +721,10 @@ class Client:
             )
             if validate is not None:
                 validate(order_data)
-        except Exception:
-            self._acknowledge(transaction_id, total, segments, bank_keys, budget, positive=False)
+        except Exception as failure:
+            self._acknowledge(
+                transaction_id, total, segments, bank_keys, budget, positive=False, failure=failure
+            )
             raise
 
         # Success. ACKNOWLEDGE consumes the data (positive receipt); KEEP declines it
@@ -803,9 +806,23 @@ class Client:
         budget: _RecoveryBudget,
         *,
         positive: bool,
+        failure: BaseException | None = None,
     ) -> None:
+        # ``failure`` is the error a negative receipt preserves the data for; a positive
+        # receipt and a KEEP read have none.
         try:
             self._send_receipt(transaction_id, total, segments, bank_keys, budget, positive)
+        except ReceiptMismatchError as mismatch:
+            if failure is None:
+                # The bank did the opposite of what the receipt asked: it left acknowledged
+                # data undelivered, or consumed data a KEEP read declined. The caller must know.
+                raise
+            # The bank consumed the data this receipt was meant to preserve. The failure is
+            # what the caller sees, so it carries the consequence as a note.
+            failure.add_note(str(mismatch))
+            logger.warning(
+                "Negative acknowledgement for transaction %s: %s", transaction_id, mismatch
+            )
         except Exception:
             if positive:
                 # A failed positive acknowledgement is a real error: the caller must know
@@ -852,9 +869,9 @@ class Client:
                 first = _next_download_segment(point, total, segments)
                 self._fetch_segments(transaction_id, total, segments, first, bank_keys, budget)
                 continue
-            # Raises on any code other than the receipt confirmations, including a recovery
-            # point once no attempt is left.
-            h005.parse_download_receipt_response(response)
+            # Raises on any code other than the confirmation of this receipt's polarity,
+            # including a recovery point once no attempt is left.
+            h005.parse_download_receipt_response(response, positive=positive)
             return
 
     def available_order_types(self) -> list[BusinessTransactionFormat]:

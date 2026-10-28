@@ -99,13 +99,16 @@ def test_letter_hashes_are_stable_across_renderings(
     assert len(pattern.findall(first)) == 3
 
 
-def test_html_escapes_identifiers(bank: Bank, keyring: Keyring) -> None:
-    user = User(partner_id="A&B", user_id="<u>")
+def test_html_escapes_identifiers(keyring: Keyring) -> None:
+    # The Partner and User IDs admit no HTML-sensitive character (H005 pattern), but a Host ID
+    # is any XML token and the branding any text.
+    bank = Bank(host_id="A&B<u>", url="https://ebicsweb.example.com/ebicsweb")
+    user = User(partner_id="PARTNER1", user_id="USER1")
     text = letter.make_ini_letter(
-        bank, user, keyring, output_format=OutputFormat.HTML
+        bank, user, keyring, output_format=OutputFormat.HTML, branding="<b>&"
     ).content.decode("utf-8")
-    assert "A&amp;B" in text
-    assert "&lt;u&gt;" in text
+    assert "A&amp;B&lt;u&gt;" in text
+    assert "&lt;b&gt;&amp;" in text
 
 
 def test_auto_falls_back_to_html_without_reportlab(

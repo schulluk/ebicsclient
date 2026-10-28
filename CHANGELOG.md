@@ -65,9 +65,20 @@ and 1.3.1 were never published.
   `091005`. Validated live against the PostFinance test platform, the second bank test
   platform the library runs against (docs/14): the handshake, HEV/HPD/HTD/HKD, a pain.001
   upload and the pain.002, camt.053 and camt.054 downloads all succeeded there.
+- `ReceiptMismatchError`, raised when the bank confirms the opposite of the receipt a
+  download sent (see Fixed below). It derives from `ReturnCodeError`, so code that catches
+  that class, or `EbicsError`, still catches it.
 
 ### Changed
 
+- `Bank`, `User` and `BusinessTransactionFormat` check their values against the H005
+  schema's types when they are created, not only for type and emptiness: the Partner and
+  User IDs must match `[a-zA-Z0-9,=]{1,35}`, the Host ID must be an XML token of at most 35
+  characters, and the components of a BTF must fit `ServiceNameStringType`,
+  `ScopeStringType`, `ServiceOptionStringType`, `MessageNameStringType`, `NumStringType` and
+  `ContainerStringType` (`ebics_types_H005.xsd`). A value outside them raises `ValueError`
+  naming the rule, before anything reaches the bank. A bank registry entry (HAA, HTD, HKD)
+  outside the schema raises `ProtocolError`.
 - Every typed download takes its BTF as the first parameter, as `download_booking_advices()`
   already did: `download_statements()` (default `CAMT_053`), `download_intraday_statements()`
   (default `CAMT_052`) and `download_payment_status_reports()` (default `PAIN_002`). The
@@ -108,6 +119,22 @@ and 1.3.1 were never published.
 
 ### Fixed
 
+- **The answer to a download's receipt was not checked against the receipt sent.** The bank
+  confirms a positive receipt with `011000` (the data is now marked delivered) and a
+  negative one with `011001` (the data stays available), EBICS 3.0 spec 5.6.1.2.2. The
+  client accepted either code after either receipt, so a bank that left acknowledged data
+  undelivered, or consumed data a `ReceiptPolicy.KEEP` read had declined, passed silently.
+  Each confirmation is now accepted only after the receipt it belongs to (`000000` after
+  either); the other code raises `ReceiptMismatchError`, which says what happened to the
+  data. After a failed validation the validation error is still what is raised; it then
+  carries the mismatch as a note. Validated live: ZKB and PostFinance answer `011000` to a
+  positive and `011001` to a negative receipt.
+- **`SignatureFlag` was sent with the text `true`, which the H005 schema rejects.** The
+  schema defines it as an empty element whose presence says the order carries an electronic
+  signature (`SignatureFlagType` restricts `FlagAttribType`); the client now sends that.
+  ZKB and PostFinance accepted both forms and processed a pain.001 sent with the empty
+  element (signature verified, pain.002 delivered). An upload request now validates against
+  the schema in full.
 - **An upload whose last answer was lost looked safe to repeat.** If the connection failed
   after the final segment had been sent, `upload()` raised the transport's
   `TransportError`, marked `TRANSIENT` ("safe to retry"), although the bank may already

@@ -72,6 +72,73 @@ def test_business_transaction_format_rejects_a_numeric_message_version() -> None
     assert "message_version must be a str" in str(caught.value)
 
 
+@pytest.mark.parametrize("identifier", ["USER 1", "USER_1", "Üser1", "U" * 36, "user-1"])
+def test_user_rejects_an_id_outside_the_schema_pattern(identifier: str) -> None:
+    # PartnerIDType and UserIDType: [a-zA-Z0-9,=]{1,35} (ebics_types_H005.xsd; spec 12.4).
+    with pytest.raises(ValueError, match=r"user_id must match \[a-zA-Z0-9,=\]\{1,35\}"):
+        User(partner_id="PARTNER1", user_id=identifier)
+    with pytest.raises(ValueError, match="partner_id must match"):
+        User(partner_id=identifier, user_id="USER1")
+
+
+def test_user_accepts_every_character_the_schema_allows() -> None:
+    user = User(partner_id="a" * 35, user_id="Ab9,=")
+    assert user.user_id == "Ab9,="
+
+
+@pytest.mark.parametrize("host_id", ["H" * 36, " HOST", "HOST ", "HO  ST", "HO\tST", "HO\nST"])
+def test_bank_rejects_a_host_id_that_is_no_token_of_at_most_35_characters(host_id: str) -> None:
+    # HostIDType: an xs:token of at most 35 characters; the spec gives it no pattern (12.4).
+    with pytest.raises(ValueError, match="host_id must"):
+        Bank(host_id=host_id, url="https://example.com/ebicsweb")
+
+
+@pytest.mark.parametrize(
+    ("component", "value"),
+    [
+        ("service_name", "eop"),
+        ("service_name", "EOPX"),
+        ("service_name", "EO"),
+        ("message_name", "CAMT.053"),
+        ("message_name", "camt.053.001"),
+        ("scope", "C"),
+        ("scope", "CHXX"),
+        ("scope", "ch"),
+        ("message_version", "8"),
+        ("message_version", "0008"),
+        ("message_version", "08a"),
+        ("container", "zip"),
+        ("container", "TAR"),
+        ("service_option", "XC"),
+        ("service_option", "X" * 11),
+        ("service_option", "xch"),
+    ],
+)
+def test_business_transaction_format_rejects_a_component_outside_its_schema_type(
+    component: str, value: str
+) -> None:
+    # ServiceNameStringType, ScopeStringType, ServiceOptionStringType, MessageNameStringType,
+    # NumStringType and ContainerStringType (ebics_types_H005.xsd).
+    components = {"service_name": "EOP", "message_name": "camt.053", component: value}
+    with pytest.raises(ValueError, match=f"{component} must"):
+        BusinessTransactionFormat(**components)
+
+
+def test_business_transaction_format_accepts_the_bounds_of_every_schema_type() -> None:
+    # A three-character service, two- and three-character scopes, ten-character option and
+    # message name, a three-digit version and each container value.
+    for scope in ("CH", "BIL"):
+        for container in ("XML", "ZIP", "SVC"):
+            BusinessTransactionFormat(
+                service_name="OTH",
+                message_name="pain.001.0",
+                scope=scope,
+                message_version="001",
+                container=container,
+                service_option="CH004TPE12",
+            )
+
+
 def test_keyring_rejects_non_key_values() -> None:
     with pytest.raises(TypeError) as caught:
         Keyring(signature="not-a-key", authentication="x", encryption="y")  # type: ignore[arg-type]

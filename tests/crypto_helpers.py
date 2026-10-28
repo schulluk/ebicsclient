@@ -10,7 +10,7 @@ import base64
 import datetime
 import os
 import zlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
@@ -110,6 +110,9 @@ def sign_response(response: bytes, bank_keyring: Keyring) -> bytes:
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
+DownloadResponse = bytes | Callable[[bytes], bytes]
+
+
 def make_download_responses(
     subscriber_keyring: Keyring,
     order_data: bytes,
@@ -117,13 +120,18 @@ def make_download_responses(
     bank_keyring: Keyring,
     num_segments: int = 1,
     transaction_id: str = "A" * 32,
-) -> list[bytes]:
+    receipt_answer: str | None = None,
+) -> list[DownloadResponse]:
     """Build the signed response sequence for a full download of ``order_data``.
 
     Encrypts ``order_data`` the way a bank would, splits the base64 stream into
     ``num_segments`` pieces, signs every response with the bank's X002 key, and returns
     ``[initialisation, transfer..., receipt]`` — the responses a fake transport should
-    hand back in order to exercise ``Client.download``.
+    hand back in order to exercise ``Client.download``. The receipt entry is a
+    :class:`ReceiptAnswer`, called with the posted receipt, so that the answer fits the
+    receipt's polarity as a bank's does; ``receipt_answer`` fixes the code the fake bank
+    gives to every receipt instead (``"011000"`` or ``"011001"``), to model a bank that
+    does the opposite of what a receipt asked.
     """
     transaction_key, encrypted = encrypt_order_data(
         subscriber_keyring.encryption.public_key(), order_data
@@ -152,8 +160,31 @@ def make_download_responses(
                 order_data=pieces[index],
             )
         )
-    responses.append(_receipt_response())
-    return [sign_response(response, bank_keyring) for response in responses]
+    signed: list[DownloadResponse] = [
+        sign_response(response, bank_keyring) for response in responses
+    ]
+    signed.append(ReceiptAnswer(bank_keyring, fixed_code=receipt_answer))
+    return signed
+
+
+class ReceiptAnswer:
+    """The fake bank's answer to a download receipt, chosen by the receipt's polarity.
+
+    A bank confirms a positive receipt (``ReceiptCode`` 0) with 011000
+    EBICS_DOWNLOAD_POSTPROCESS_DONE and a negative one (``ReceiptCode`` 1) with 011001
+    EBICS_DOWNLOAD_POSTPROCESS_SKIPPED (spec 5.6.1.2.2; both validated live at ZKB and
+    PostFinance), so the fixture must see the request before it can answer. ``fixed_code``
+    makes it answer every receipt with that code, as a bank that deviates from the spec.
+    """
+
+    def __init__(self, bank_keyring: Keyring, *, fixed_code: str | None = None) -> None:
+        self._bank_keyring = bank_keyring
+        self._fixed_code = fixed_code
+
+    def __call__(self, request: bytes) -> bytes:
+        receipt_code = etree.fromstring(request).findtext(f".//{{{h005.NAMESPACE}}}ReceiptCode")
+        code = self._fixed_code or ("011000" if receipt_code == "0" else "011001")
+        return sign_response(_receipt_response(code), self._bank_keyring)
 
 
 def _split(stream: str, parts: int) -> list[str]:
@@ -202,9 +233,15 @@ def _download_response(
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
-def _receipt_response() -> bytes:
-    # A real bank acknowledges a positive receipt with 011000 EBICS_DOWNLOAD_POSTPROCESS_DONE
-    # (validated live on ZKB), so the fixture mirrors that rather than 000000.
+_RECEIPT_REPORTS = {
+    "011000": "[EBICS_DOWNLOAD_POSTPROCESS_DONE] Positive acknowledgement received",
+    "011001": "[EBICS_DOWNLOAD_POSTPROCESS_SKIPPED] Negative acknowledgement received",
+}
+
+
+def _receipt_response(code: str) -> bytes:
+    # A bank confirms a receipt with the postprocess code of its polarity, with the report
+    # text Annex 1 prescribes, rather than with 000000.
     namespace = h005.NAMESPACE
     root = etree.Element(etree.QName(namespace, "ebicsResponse"), nsmap={None: namespace})
     root.set("Version", "H005")
@@ -214,12 +251,10 @@ def _receipt_response() -> bytes:
     etree.SubElement(header, etree.QName(namespace, "static"))
     mutable = etree.SubElement(header, etree.QName(namespace, "mutable"))
     etree.SubElement(mutable, etree.QName(namespace, "TransactionPhase")).text = "Receipt"
-    etree.SubElement(mutable, etree.QName(namespace, "ReturnCode")).text = "011000"
-    etree.SubElement(mutable, etree.QName(namespace, "ReportText")).text = (
-        "[EBICS_DOWNLOAD_POSTPROCESS_DONE] Positive acknowledgement received"
-    )
+    etree.SubElement(mutable, etree.QName(namespace, "ReturnCode")).text = code
+    etree.SubElement(mutable, etree.QName(namespace, "ReportText")).text = _RECEIPT_REPORTS[code]
     body = etree.SubElement(root, etree.QName(namespace, "body"))
-    etree.SubElement(body, etree.QName(namespace, "ReturnCode")).text = "011000"
+    etree.SubElement(body, etree.QName(namespace, "ReturnCode")).text = code
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 

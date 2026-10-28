@@ -177,7 +177,7 @@ def test_admin_download_request_validates(
 
 @pytest.mark.parametrize("with_certificates", [False, True])
 @pytest.mark.parametrize("btf", [PAIN_001, PAIN_001_CGI, experimental.PAIN_001_SEPA])
-def test_upload_initialisation_request_validates_except_the_signature_flag(
+def test_upload_initialisation_request_validates(
     btf: BusinessTransactionFormat,
     with_certificates: bool,
     bank: Bank,
@@ -185,20 +185,15 @@ def test_upload_initialisation_request_validates_except_the_signature_flag(
     keyring: Keyring,
 ) -> None:
     # PAIN_001_CGI adds a ServiceOption and PAIN_001_SEPA drops the Scope: both shapes must hold,
-    # with the bank keys named by certificate hash and by public-key hash alike.
+    # with the bank keys named by certificate hash and by public-key hash alike. SignatureFlag
+    # is the empty element the schema defines (FlagAttribType), so the whole request validates;
+    # until 2026-10-28 it carried the text "true", the one deviation this test had to allow.
     bank_keys = _bank_keys(keys.generate_keyring(), with_certificates=with_certificates)
     payload = h005.prepare_upload(user, keyring, bank_keys, b"<Document>pay</Document>")
     request = h005.build_upload_initialisation_request(
         bank, user, keyring, bank_keys, btf, payload
     )
-    schema = _schema("ebics_request_H005.xsd")
-    document = etree.fromstring(request)
-    valid = schema.validate(document)
-    # The H005 XSD types SignatureFlag as an empty flag, but interoperable EBICS clients send
-    # the boolean text "true" and banks expect it (to be confirmed live against ZKB). Assert the
-    # ONLY schema deviation is that known SignatureFlag content — everything else is valid.
-    errors = [error.message for error in schema.error_log]
-    assert valid or (errors and all("SignatureFlag" in error for error in errors)), errors
+    _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
 
 
 def test_upload_transfer_request_validates(bank: Bank, keyring: Keyring) -> None:
@@ -230,7 +225,7 @@ def test_key_change_order_data_validates(
 def test_key_change_initialisation_request_validates(
     rotation: KeyRotation, bank: Bank, user: User, keyring: Keyring
 ) -> None:
-    # Unlike a BTU upload (SignatureFlag, above), the admin upload is fully schema-valid.
+    # The admin upload carries no SignatureFlag; it validates like the BTU upload above.
     bank_keys = _bank_keys(keys.generate_keyring())
     successor = keys.rotate_keyring(keyring, rotation)
     payload = h005.prepare_upload(

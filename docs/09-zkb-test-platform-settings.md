@@ -300,7 +300,12 @@ the bank's own registry as the oracle:
   results are never bridged to the EBICS queues (even when left unconsumed in the GUI).
 - These probes also completed **full live BTD download transactions** (initialise → decrypt →
   receipt) and revealed that the bank acknowledges a positive receipt with
-  **`011000 EBICS_DOWNLOAD_POSTPROCESS_DONE`** — a success code the client now accepts.
+  **`011000 EBICS_DOWNLOAD_POSTPROCESS_DONE`** — a success code the client now accepts. On
+  2026-10-28 a HAC download with `ReceiptPolicy.KEEP` showed the counterpart: a negative
+  receipt is answered `011001 EBICS_DOWNLOAD_POSTPROCESS_SKIPPED`, and the kept log came again.
+  The same day a pain.001 (order `N01C`) sent with `SignatureFlag` as the schema's empty
+  element, instead of the text `true` of the probes above, was processed as before (`DS01`,
+  pain.002 `ACTC` then `PART`).
 
 The manual (`ZKB_Testplattform_BenHB.pdf`, §3.7.4–3.7.5) documents EBICS submission/retrieval as
 supported, so the dead EBICS→simulation bridge contradicted the platform's own documentation —

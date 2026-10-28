@@ -5,6 +5,7 @@ the feature modules (e.g. ``keys.py`` for keyring generation and persistence).
 """
 
 import datetime
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -12,8 +13,20 @@ from enum import StrEnum
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+# The H005 schema's rules for the identifiers and BTF components a request carries
+# (ebics_types_H005.xsd; spec 12.4 lists the identifier patterns). A value outside them is
+# refused here, where the message names the rule, instead of by the bank with a return code.
+_PARTNER_OR_USER_ID = re.compile(r"[a-zA-Z0-9,=]{1,35}")  # PartnerIDType, UserIDType
+_HOST_ID_MAX_LENGTH = 35  # HostIDType: an XML token of at most 35 characters, no pattern
+_SERVICE_NAME = re.compile(r"[A-Z0-9]{3}")  # ServiceNameStringType
+_SCOPE = re.compile(r"[A-Z0-9]{2,3}")  # ScopeStringType
+_SERVICE_OPTION = re.compile(r"[A-Z0-9]{3,10}")  # ServiceOptionStringType
+_MESSAGE_NAME = re.compile(r"[a-z.0-9]{1,10}")  # MessageNameStringType
+_MESSAGE_VERSION = re.compile(r"[0-9]{2,3}")  # NumStringType, the version of a MessageType
+_CONTAINERS = frozenset({"SVC", "XML", "ZIP"})  # ContainerStringType
 
-def _require_identifier(field_name: str, value: object) -> None:
+
+def _require_text(field_name: str, value: object) -> str:
     # EBICS identifiers can carry leading zeros (e.g. a Partner ID of "00123456").
     # Loaded from an unquoted YAML/JSON/TOML config value they arrive as numbers — the wrong
     # type AND silently stripped of their zeros (PyYAML even reads all-octal-digit values as
@@ -27,11 +40,37 @@ def _require_identifier(field_name: str, value: object) -> None:
         )
     if not value.strip():
         raise ValueError(f"{field_name} must not be empty")
+    return value
 
 
-def _require_optional_identifier(field_name: str, value: object) -> None:
-    if value is not None:
-        _require_identifier(field_name, value)
+def _require_pattern(field_name: str, value: object, pattern: re.Pattern[str], rule: str) -> None:
+    text = _require_text(field_name, value)
+    if pattern.fullmatch(text) is None:
+        raise ValueError(f"{field_name} must match {pattern.pattern} ({rule}), got {text!r}")
+
+
+def _require_token(field_name: str, value: object, max_length: int, rule: str) -> None:
+    # An XML token (xs:token) has no tab or line break and no leading, trailing or double space.
+    text = _require_text(field_name, value)
+    if len(text) > max_length:
+        raise ValueError(
+            f"{field_name} must have at most {max_length} characters ({rule}), got {len(text)}"
+        )
+    if (
+        text != text.strip(" ")
+        or "  " in text
+        or any(character in "\t\n\r" for character in text)
+    ):
+        raise ValueError(
+            f"{field_name} must be an XML token, without tab, line break or leading, trailing "
+            f"or double space ({rule}), got {text!r}"
+        )
+
+
+def _require_one_of(field_name: str, value: object, allowed: frozenset[str], rule: str) -> None:
+    text = _require_text(field_name, value)
+    if text not in allowed:
+        raise ValueError(f"{field_name} must be one of {sorted(allowed)} ({rule}), got {text!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,15 +83,16 @@ class Bank:
 
     Raises:
         TypeError: a field is not a ``str`` (e.g. a numeric config value).
-        ValueError: a field is empty.
+        ValueError: a field is empty, or ``host_id`` is not an XML token of at most 35
+            characters (H005 ``HostIDType``).
     """
 
     host_id: str
     url: str
 
     def __post_init__(self) -> None:
-        _require_identifier("host_id", self.host_id)
-        _require_identifier("url", self.url)
+        _require_token("host_id", self.host_id, _HOST_ID_MAX_LENGTH, "H005 HostIDType")
+        _require_text("url", self.url)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,15 +106,16 @@ class User:
     Raises:
         TypeError: an ID is not a ``str`` — commonly an unquoted, zero-leading ID in a
             YAML/JSON config parsed as a number (which also silently drops the zeros).
-        ValueError: an ID is empty.
+        ValueError: an ID is empty or outside ``[a-zA-Z0-9,=]{1,35}`` (H005
+            ``PartnerIDType`` and ``UserIDType``).
     """
 
     partner_id: str
     user_id: str
 
     def __post_init__(self) -> None:
-        _require_identifier("partner_id", self.partner_id)
-        _require_identifier("user_id", self.user_id)
+        _require_pattern("partner_id", self.partner_id, _PARTNER_OR_USER_ID, "H005 PartnerIDType")
+        _require_pattern("user_id", self.user_id, _PARTNER_OR_USER_ID, "H005 UserIDType")
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +280,14 @@ class BusinessTransactionFormat:
         message_version: The ISO 20022 version, e.g. ``"08"``.
         container: The container format, e.g. ``"ZIP"``; ``None`` for none.
         service_option: An optional service option code.
+
+    Raises:
+        TypeError: a component is not a ``str`` (e.g. a numeric config value).
+        ValueError: a component is empty or outside its H005 type (``ebics_types_H005.xsd``):
+            ``service_name`` is three characters of ``[A-Z0-9]``, ``scope`` two or three,
+            ``service_option`` three to ten; ``message_name`` is one to ten characters of
+            ``[a-z.0-9]``; ``message_version`` is two or three digits; ``container`` is
+            ``XML``, ``ZIP`` or ``SVC``.
     """
 
     service_name: str
@@ -251,12 +300,27 @@ class BusinessTransactionFormat:
     def __post_init__(self) -> None:
         # message_version is the classic trap: an unquoted "08" in YAML/JSON config arrives
         # as the int 8 — wrong type and a silently different version on the wire.
-        _require_identifier("service_name", self.service_name)
-        _require_identifier("message_name", self.message_name)
-        _require_optional_identifier("scope", self.scope)
-        _require_optional_identifier("message_version", self.message_version)
-        _require_optional_identifier("container", self.container)
-        _require_optional_identifier("service_option", self.service_option)
+        _require_pattern(
+            "service_name", self.service_name, _SERVICE_NAME, "H005 ServiceNameStringType"
+        )
+        _require_pattern(
+            "message_name", self.message_name, _MESSAGE_NAME, "H005 MessageNameStringType"
+        )
+        if self.scope is not None:
+            _require_pattern("scope", self.scope, _SCOPE, "H005 ScopeStringType")
+        if self.message_version is not None:
+            _require_pattern(
+                "message_version", self.message_version, _MESSAGE_VERSION, "H005 NumStringType"
+            )
+        if self.container is not None:
+            _require_one_of("container", self.container, _CONTAINERS, "H005 ContainerStringType")
+        if self.service_option is not None:
+            _require_pattern(
+                "service_option",
+                self.service_option,
+                _SERVICE_OPTION,
+                "H005 ServiceOptionStringType",
+            )
 
 
 @dataclass(frozen=True, slots=True)

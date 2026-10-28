@@ -24,6 +24,7 @@ from ebicsclient.certificates import MappingCertificateProvider, TrustAnchorVeri
 from ebicsclient.errors import (
     BankCertificateError,
     ProtocolError,
+    ReceiptMismatchError,
     ResponseAuthenticationError,
     ReturnCodeError,
     UnknownReturnCodeError,
@@ -513,7 +514,13 @@ def test_upload_initialisation_request_is_signed_and_carries_the_btu_details(
     assert root.findtext(f".//{{{_NS}}}ServiceName") == "MCT"
     assert root.findtext(f".//{{{_NS}}}MsgName") == "pain.001"
     assert root.findtext(f".//{{{_NS}}}NumSegments") == "1"
-    assert root.findtext(f".//{{{_NS}}}SignatureFlag") == "true"
+    # SignatureFlag is the empty element of FlagAttribType: its presence says the order
+    # carries the ES; it has no text and, without an EDS request, no attribute.
+    signature_flag = root.find(f".//{{{_NS}}}SignatureFlag")
+    assert signature_flag is not None
+    assert signature_flag.text is None
+    assert len(signature_flag) == 0
+    assert not signature_flag.attrib
     data_digest = root.find(f".//{{{_NS}}}DataDigest")
     assert data_digest is not None
     assert data_digest.get("SignatureVersion") == "A006"
@@ -579,31 +586,80 @@ def _receipt_response(code: str, report: str) -> bytes:
     ).encode()
 
 
-def test_parse_download_receipt_response_accepts_the_positive_acknowledgement() -> None:
-    # A real bank answers a positive receipt with 011000 (validated live on ZKB).
+_POSTPROCESS_DONE = (
+    "011000",
+    "[EBICS_DOWNLOAD_POSTPROCESS_DONE] Positive acknowledgement received",
+)
+_POSTPROCESS_SKIPPED = (
+    "011001",
+    "[EBICS_DOWNLOAD_POSTPROCESS_SKIPPED] Negative acknowledgement received",
+)
+
+
+@pytest.mark.parametrize(
+    ("positive", "confirmation"), [(True, _POSTPROCESS_DONE), (False, _POSTPROCESS_SKIPPED)]
+)
+def test_parse_download_receipt_response_accepts_the_confirmation_of_the_receipt_sent(
+    positive: bool, confirmation: tuple[str, str]
+) -> None:
+    # Spec 5.6.1.2.2: 011000 confirms a positive receipt, 011001 a negative one. ZKB and
+    # PostFinance answer exactly so (live, 2026-10-28).
     h005.parse_download_receipt_response(
-        _receipt_response("011000", "[EBICS_DOWNLOAD_POSTPROCESS_DONE] Positive acknowledgement")
+        _receipt_response(*confirmation), positive=positive
     )  # does not raise
 
 
-def test_parse_download_receipt_response_accepts_plain_ok() -> None:
-    h005.parse_download_receipt_response(_receipt_response("000000", "[EBICS_OK] OK"))
+@pytest.mark.parametrize("positive", [True, False])
+def test_parse_download_receipt_response_accepts_plain_ok(positive: bool) -> None:
+    h005.parse_download_receipt_response(
+        _receipt_response("000000", "[EBICS_OK] OK"), positive=positive
+    )
+
+
+def test_parse_download_receipt_response_raises_when_a_positive_receipt_is_skipped() -> None:
+    # 011001 after a positive receipt: the bank left the data undelivered, so it may serve
+    # the same data again.
+    with pytest.raises(ReceiptMismatchError) as caught:
+        h005.parse_download_receipt_response(
+            _receipt_response(*_POSTPROCESS_SKIPPED), positive=True
+        )
+    assert caught.value.code == "011001"
+    assert caught.value.positive is True
+    assert "positive receipt with 011001" in str(caught.value)
+    assert "may serve the same data again" in str(caught.value)
+
+
+def test_parse_download_receipt_response_raises_when_a_negative_receipt_is_consumed() -> None:
+    # 011000 after a negative receipt: the bank marked data delivered that the client declined.
+    with pytest.raises(ReceiptMismatchError) as caught:
+        h005.parse_download_receipt_response(
+            _receipt_response(*_POSTPROCESS_DONE), positive=False
+        )
+    assert caught.value.code == "011000"
+    assert caught.value.positive is False
+    assert "negative receipt with 011000" in str(caught.value)
+    assert "will not serve that data again" in str(caught.value)
+    # Still a return-code error, so a coarse handler keeps working.
+    assert isinstance(caught.value, ReturnCodeError)
 
 
 def test_parse_download_receipt_response_raises_on_a_known_error() -> None:
     with pytest.raises(ReturnCodeError) as caught:
         h005.parse_download_receipt_response(
-            _receipt_response("061099", "[EBICS_INTERNAL_ERROR] Internal error")
+            _receipt_response("061099", "[EBICS_INTERNAL_ERROR] Internal error"), positive=True
         )
     assert caught.value.code == "061099"
     assert not isinstance(caught.value, UnknownReturnCodeError)
+    assert not isinstance(caught.value, ReceiptMismatchError)
 
 
 def test_parse_download_receipt_response_labels_an_unknown_code_as_unknown() -> None:
     # 091010 is not in the client's verified return-code table: still a failure (never
     # fail open), but explicitly labelled unverified rather than masked as a known one.
     with pytest.raises(UnknownReturnCodeError) as caught:
-        h005.parse_download_receipt_response(_receipt_response("091010", "whatever the bank says"))
+        h005.parse_download_receipt_response(
+            _receipt_response("091010", "whatever the bank says"), positive=True
+        )
     assert caught.value.code == "091010"
     assert "Unknown EBICS return code" in str(caught.value)
 
@@ -724,6 +780,18 @@ def test_parse_available_order_types_reads_service_entries() -> None:
     assert first.message_version == "08"
     assert second.service_name == "PSR"
     assert second.container is None
+
+
+def test_parse_available_order_types_rejects_an_entry_outside_the_schema() -> None:
+    # A registry is bound by the same schema as a request: a lower-case service name is no
+    # ServiceNameStringType, and the failure is a protocol error, not a bare ValueError.
+    order_data = (
+        f'<HAAResponseOrderData xmlns="{_NS}">'
+        "<Service><ServiceName>eop</ServiceName><MsgName>camt.053</MsgName></Service>"
+        "</HAAResponseOrderData>"
+    ).encode()
+    with pytest.raises(ProtocolError, match="outside the H005 schema: service_name must match"):
+        h005.parse_available_order_types(order_data)
 
 
 def test_parse_subscriber_info_reads_the_real_htd_response() -> None:
