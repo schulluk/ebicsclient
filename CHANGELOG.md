@@ -8,6 +8,8 @@ and 1.3.1 were never published.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-28
+
 ### Added
 
 - `VersionPolicy`: with `Client(..., version_policy=VersionPolicy.STRICT)`, the client
@@ -157,6 +159,13 @@ and 1.3.1 were never published.
   method, corrupt compressed data) raised standard-library exceptions such as
   `RuntimeError` or `zlib.error` instead of `MessageFormatError`. Every such failure now
   raises `MessageFormatError`, so catching `EbicsError` covers it.
+
+Everything above was validated live against the ZKB test platform, except where an entry
+says otherwise: download recovery of several segments is tested offline only, and a party
+that is a bank and an account without an IBAN are checked against the ISO 20022 schema
+only. The receipt check, the empty `SignatureFlag`, the pain.001 upload, the PostFinance
+form of the pain.002 download, and the statement, booking advice and HAC downloads were
+validated against the PostFinance test platform as well.
 
 ## [1.8.0] - 2026-10-26
 
@@ -354,7 +363,8 @@ bank-issued), bank-key pinning, statement download (BTD) with camt.053 parsing, 
 upload (BTU) with the A006 electronic signature, an HTTPS transport with a TLS 1.2 floor,
 and an encrypted keyring.
 
-[Unreleased]: https://github.com/schulluk/ebicsclient/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/schulluk/ebicsclient/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/schulluk/ebicsclient/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/schulluk/ebicsclient/compare/v1.7.2...v1.8.0
 [1.7.2]: https://github.com/schulluk/ebicsclient/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/schulluk/ebicsclient/compare/v1.7.0...v1.7.1
