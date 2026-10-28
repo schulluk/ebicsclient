@@ -130,8 +130,8 @@ that one (validated here with a third upload, order `N004`).
 - **HTD:** user status `1`, 35 partner order types and 35 user permissions. Every upload
   permission carries signature class `E`, every upload order type `NumSigRequired` `0`, and the
   key-management types (INI, HIA, PUB, HCA, HCS, SPR) class `T`: a single-user subscriber, so EDS
-  cannot be exercised here either. `HAC` and `PTK` are registered (ZKB served both without
-  listing them).
+  cannot be exercised here either, and none of the `HV*` order types is registered (see *No
+  release flows* below). `HAC` and `PTK` are registered (ZKB served both without listing them).
 - **HKD:** no accounts (none created yet), the same 35 order types.
 - **HAA:** empty — nothing has been uploaded.
 
@@ -220,7 +220,21 @@ notifications. Bank order `N003`.
 - **Uploads need no signature:** "Die Dateien können ohne Unterschrift hochgeladen werden"
   (§4.7.9). A `000000` therefore says even less about the A006 signature than at ZKB, where a
   wrong signature only dropped the order after the exchange ([docs/09](09-zkb-test-platform-settings.md),
-  correction of 2026-10-26). Whether a signature that *is* supplied gets verified is unknown.
+  correction of 2026-10-26). A signature that *is* supplied gets verified: HAC logs `DS01` for
+  every upload (2026-10-28); whether a wrong one is rejected has not been probed.
+- **No release flows, hence no EDS:** §3.3 lists "Freigabe (Einzel- und Kollektivunterschrift)"
+  among the processes the platform cannot test, *EBICS-Zugang anlegen* creates exactly one EBICS
+  subscriber per test customer (§4.5.1) with no way to add a second, and HTD registers none of
+  the `HV*` order types — the same limit ZKB's support confirmed for its platform on 2026-10-26.
+  PostFinance **production** does offer EDS: the *EBICS Parameterdatenblatt PostFinance* (01765
+  de, version 19; `https://www.postfinance.ch/content/dam/pfch/doc/0_399/01765_de.pdf`) lists
+  HVD, HVE, HVS, HVT, HVU and HVZ among its system order types, and the *Factsheet EBICS für
+  Softwarehersteller* (460.186 de, 01.2025;
+  `https://www.postfinance.ch/content/dam/pfch/doc/460_479/460_186_de.pdf`) describes release by
+  distributed signature per user with the classes E, T and Kollektivunterschrift A/B, given from
+  the EBICS client or PostFinance's *EBICS VEU App*, next to the person-neutral Corporate Seal
+  (E, T). Exercising EDS at PostFinance therefore needs a production contract with those rights,
+  not the test platform.
 - **Results are ZIP archives**, which "entspricht nicht dem Verhalten in der Produktion" (§3.3),
   and `XTD` arrives as a ZIP without the `.zip` suffix (§4.7.12). Nothing is pushed; the customer
   fetches (§3.3).
@@ -343,6 +357,7 @@ QRR mit SCOR* off).
 | CH-DD direct debit (pain.008) | `DDD / BIL / CH001COR \| CH001B2B / pain.008 / 02` | — (no constant) | ⬜ out of scope; the first place a direct debit could be tested |
 | QRR/ASR simulation input (CSV) | `OTH / BIL / CH002LMF / csv` | — (the ZKB tool does not fit) | ⬜ |
 | Bank-side A006 verification | uploads accepted "ohne Unterschrift" | — | 🟡 HAC logs `DS01` (signature correct) for every upload, so the platform verifies the signature it gets; whether a wrong one is rejected has not been probed |
+| EDS (HVU, HVZ, HVD, HVT, HVE, HVS) | not offered: release flows excluded (§3.3), one subscriber per test customer (§4.5.1), no `HV*` type in HTD | — (not implemented; see [docs/13](13-standard-conformance.md)) | ⬜ cannot be exercised here; PostFinance production lists all six in its parameter sheet 01765 |
 
 **Legend:** ✅ verified · 🟡 partly verified · ⏳ implemented, live-verification pending · ❌ fails at this bank · ⬜ not started / out of scope.
 
