@@ -8,6 +8,32 @@ absent, not excluded — unless the **Notes** say otherwise.
 > This is the at-a-glance map. The per-claim spec citations and oracles behind each *supported*
 > row live in the [verification ledger](12-verification-ledger.md).
 
+## In numbers
+
+Counted over the capability rows of this page on 2026-10-28, the deliberately excluded H004
+row aside; "implemented" is a ✅ row, "partial" a 🟡 row. Update the counts when rows change.
+
+| Area | Rows | Implemented | Partial | Missing | Implemented share |
+|---|---|---|---|---|---|
+| Key ceremony & key management | 17 | 13 | 1 | 3 | 76 % |
+| Request header | 3 | 1 | 0 | 2 | 33 % |
+| **Read — downloads** | 28 | 24 | 3 | 1 | **86 %** |
+| **Write — uploads** | 13 | 9 | 2 | 2 | **69 %** |
+| **EDS / VEU** | 7 | 0 | 0 | 7 | **0 %** |
+| **All** | **68** | **47** | **6** | **15** | **69 %** |
+
+By order type: 15 of the 22 administrative order types of H005 (spec chapter 13) are
+implemented. Missing are H3K and the six EDS order types (HVU, HVZ, HVD, HVT, HVE, HVS).
+
+Every behaviour the standard requires unconditionally is implemented, five of them in part:
+the upper key-length bounds, the abort on a response that fails verification, the bank's
+segment signals in a download, the SEPA BTF `SCT` (experimental) and pain.008 (through a
+custom BTF, without a typed helper). Everything missing is optional in the standard (the
+EDS family, H3K, `SystemID`, `Product`, `Parameter`, `PreValidation`, `AdditionalOrderInfo`),
+left to the bank (A005), or a recommendation (a certified key store). EDS is blocked on a
+test environment with several required signatures, not on a design decision; the EDS
+section below says what would unblock it.
+
 ## Legend
 
 - **Support** — ✅ implemented · 🟡 partial (see Notes) · ❌ not implemented.
@@ -111,6 +137,17 @@ EDS (formerly VEU) is EBICS's workflow for orders that require **several people 
 the bank executes them** — dual-control on payments. The entire family is **unimplemented**:
 today an order can only be uploaded with all required signatures inside a single request, or
 authorised outside EBICS.
+
+Validating EDS needs a subscriber that requires several signatures, and no reachable test
+environment offers one: the ZKB and PostFinance test platforms each run a single user with
+signature class `E` and `NumSigRequired` `0` (ZKB's support confirmed it has no other way to
+test EDS; for PostFinance see [docs/14](14-postfinance-test-platform.md)), and the library
+ships only what a bank has accepted. **Help wanted: if you can provide access to an EBICS
+test environment with multiple required signatures**, whether a bank test platform, a
+vendor's demo server or a production contract willing to test, please open an
+[issue](https://github.com/schulluk/ebicsclient/issues) or write to the maintainer via
+[ebicsclient.miniapps.ch](https://ebicsclient.miniapps.ch). With such access the order types
+below will be implemented and validated.
 
 | Order type | Rule | Support | Notes |
 |---|---|---|---|

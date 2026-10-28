@@ -18,9 +18,9 @@ import argparse
 import sys
 from datetime import date
 
-from ebicsclient import DateRange, DateRangeMismatchError
+from ebicsclient import DateRange, DateRangeMismatchError, ReturnCodeError
 
-from _config import load_environment, online_client
+from _config import is_nothing_waiting, load_environment, online_client
 
 
 def main() -> int:
@@ -33,6 +33,12 @@ def main() -> int:
 
     try:
         statements = client.download_statements(date_range=date_range)
+    except ReturnCodeError as error:
+        if not is_nothing_waiting(error):
+            raise
+        print(f"Nothing for {start.isoformat()}..{end.isoformat()}: the bank holds no statements")
+        print("for that range (090005).")
+        return 0
     except DateRangeMismatchError as mismatch:
         # The bank returned an entry outside the window — it likely does not support
         # DateRange. The data was NOT acknowledged, so nothing was lost; do not treat these

@@ -13,11 +13,10 @@ before the acknowledgement, any failure leaves the statements un-acknowledged at
     uv run python examples/02_daily_statement_sync.py
 """
 
-from ebicsclient import Statement
+from ebicsclient import CAMT_053, ReturnCodeError, Statement
 from ebicsclient.formats import camt053
-from ebicsclient.models import CAMT_053
 
-from _config import load_environment, online_client
+from _config import is_nothing_waiting, load_environment, online_client
 
 
 def main() -> int:
@@ -36,7 +35,13 @@ def main() -> int:
 
     # validate= is the seam that runs before the acknowledgement. Doing the real work there
     # is what makes this fail closed: an error propagates and the data is NOT consumed.
-    client.download(CAMT_053, validate=book_everything)
+    try:
+        client.download(CAMT_053, validate=book_everything)
+    except ReturnCodeError as error:
+        if not is_nothing_waiting(error):
+            raise
+        print("Nothing to book: the bank holds no new statements (090005).")
+        return 0
 
     plural = "y" if booked == 1 else "ies"
     print(f"\nBooked {booked} entr{plural}; statements acknowledged at the bank.")

@@ -8,6 +8,27 @@ and 1.3.1 were never published.
 
 ## [Unreleased]
 
+### Added
+
+- Four examples: `07_incoming_payments.py` resolves a collective credit into its single
+  payments and groups the day's incoming payments by creditor reference;
+  `08_bank_discovery.py` asks the bank for its EBICS versions, parameters, registered order
+  types and waiting data, and looks up the registered form of the pain.002 download;
+  `09_audit_trail_hac.py` reads the bank's log of EBICS actions per order;
+  `10_strict_message_version.py` downloads under `VersionPolicy.STRICT`. The shared
+  `examples/_config.py` takes a `version_policy`.
+- [docs/13](docs/13-standard-conformance.md) opens with the coverage in numbers, per area
+  and as 15 of the 22 H005 order types, and asks for access to a test environment with
+  several required signatures, which is what EDS waits for. The README carries the numbers
+  and the request too.
+
+### Fixed
+
+- The examples report an empty queue instead of failing with a traceback: a typed download
+  with nothing waiting raises `ReturnCodeError` `090005`, which the examples treated as an
+  empty list. `04_pay_and_check_status.py status --zip` requests the pain.002 form with the
+  ZIP container, as PostFinance registers it.
+
 ## [1.9.0] - 2026-10-28
 
 ### Added

@@ -8,7 +8,11 @@ report with the real outcome — accepted, partially accepted, or rejected, some
 the individual transaction with a reason code. ``status`` downloads those reports and prints
 the group and per-transaction results.
 
-Run ``pay`` first, give the bank a little time to process, then run ``status``.
+Run ``pay`` first, give the bank a little time to process, then run ``status``. Banks
+register the pain.002 download differently: ZKB without a container (``PAIN_002``, the
+default), PostFinance with the ZIP container (``PAIN_002_ZIP``, ``status --zip``); each
+refuses the other form with ``091005``. ``08_bank_discovery.py`` reads the registered form
+off the bank's HTD.
 
 If ``pay`` loses the bank's answer to the last part of the upload, the bank may hold the
 payment or not, and ``pay`` says so instead of failing as if nothing had been sent. Run
@@ -17,16 +21,23 @@ payment or not, and ``pay`` says so instead of failing as if nothing had been se
     uv run python examples/04_pay_and_check_status.py pay path/to/payment.xml
     # ... wait for the bank to process it ...
     uv run python examples/04_pay_and_check_status.py status
+    uv run python examples/04_pay_and_check_status.py status --zip   # PostFinance
 """
 
 import argparse
 from collections.abc import Iterable
 from pathlib import Path
 
-from ebicsclient import StatusReason, UploadUnconfirmedError
-from ebicsclient.models import PAIN_001
+from ebicsclient import (
+    PAIN_001,
+    PAIN_002,
+    PAIN_002_ZIP,
+    ReturnCodeError,
+    StatusReason,
+    UploadUnconfirmedError,
+)
 
-from _config import load_environment, online_client
+from _config import is_nothing_waiting, load_environment, online_client
 
 
 def pay(pain001_path: Path) -> int:
@@ -48,13 +59,22 @@ def pay(pain001_path: Path) -> int:
     return 0
 
 
-def status() -> int:
-    """Download the pain.002 payment status reports and print each outcome."""
-    client = online_client()
-    reports = client.download_payment_status_reports()
+def status(*, zip_container: bool) -> int:
+    """Download the pain.002 payment status reports and print each outcome.
 
-    if not reports:
-        print("No payment status reports available yet — the bank may still be processing.")
+    Args:
+        zip_container: Request the form with the ZIP container (``PAIN_002_ZIP``), as
+            PostFinance registers it, instead of the container-less ``PAIN_002``.
+    """
+    client = online_client()
+    try:
+        reports = client.download_payment_status_reports(
+            PAIN_002_ZIP if zip_container else PAIN_002
+        )
+    except ReturnCodeError as error:
+        if not is_nothing_waiting(error):
+            raise
+        print("No payment status report yet (090005): the bank may still be processing.")
         return 0
 
     for report in reports:
@@ -94,12 +114,17 @@ def main() -> int:
     subcommands = parser.add_subparsers(dest="step", required=True)
     pay_command = subcommands.add_parser("pay", help="upload a pain.001 file")
     pay_command.add_argument("path", type=Path, help="path to the pain.001 document")
-    subcommands.add_parser("status", help="download the pain.002 status reports")
+    status_command = subcommands.add_parser("status", help="download the pain.002 status reports")
+    status_command.add_argument(
+        "--zip",
+        action="store_true",
+        help="request the form with the ZIP container (PAIN_002_ZIP), as PostFinance registers it",
+    )
 
     arguments = parser.parse_args()
     if arguments.step == "pay":
         return pay(arguments.path)
-    return status()
+    return status(zip_container=arguments.zip)
 
 
 if __name__ == "__main__":

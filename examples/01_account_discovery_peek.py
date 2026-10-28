@@ -12,9 +12,9 @@ production; each run leaves the statements available.
     uv run python examples/01_account_discovery_peek.py
 """
 
-from ebicsclient import ReceiptPolicy
+from ebicsclient import ReceiptPolicy, ReturnCodeError
 
-from _config import load_environment, online_client
+from _config import is_nothing_waiting, load_environment, online_client
 
 
 def main() -> int:
@@ -24,10 +24,12 @@ def main() -> int:
 
     # KEEP: run the whole download, but decline it with a negative receipt at the end, so
     # the bank still has the data for tonight's real (acknowledging) import.
-    statements = client.download_statements(receipt_policy=ReceiptPolicy.KEEP)
-
-    if not statements:
-        print("Nothing waiting: the bank offered no end-of-day statements right now.")
+    try:
+        statements = client.download_statements(receipt_policy=ReceiptPolicy.KEEP)
+    except ReturnCodeError as error:
+        if not is_nothing_waiting(error):
+            raise
+        print("Nothing waiting: the bank holds no end-of-day statements right now (090005).")
         return 0
 
     print(f"The bank is holding {len(statements)} statement(s) — peeked, not consumed:\n")

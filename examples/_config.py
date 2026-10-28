@@ -35,12 +35,24 @@ from ebicsclient import (
     BankKeyHashes,
     CertificateProvider,
     Client,
+    ReturnCodeError,
     User,
+    VersionPolicy,
     load_keyring,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_ENV_FILE = _REPO_ROOT.parent / "local" / ".env"
+
+#: The EBICS return code a download gets when the bank holds nothing for the request
+#: (``EBICS_NO_DOWNLOAD_DATA_AVAILABLE``). The typed downloads raise it as a
+#: ``ReturnCodeError``; for a job, an empty queue is a normal outcome, not a failure.
+NO_DOWNLOAD_DATA_AVAILABLE = "090005"
+
+
+def is_nothing_waiting(error: ReturnCodeError) -> bool:
+    """Whether ``error`` is the bank saying it holds no data for the download (``090005``)."""
+    return error.code == NO_DOWNLOAD_DATA_AVAILABLE
 
 
 def load_environment() -> None:
@@ -57,6 +69,7 @@ def client_from_env(
     *,
     certificate_provider: CertificateProvider | None = None,
     bank_certificate_verifier: BankCertificateVerifier | None = None,
+    version_policy: VersionPolicy = VersionPolicy.ACCEPT_ANY,
 ) -> Client:
     """Build a :class:`~ebicsclient.Client` from the ``EBICS_*`` environment variables.
 
@@ -65,6 +78,8 @@ def client_from_env(
             keeps the library default (self-signed — the "mit Schlüsseln" profile); pass one
             for the "mit Zertifikaten" profile (see ``05_certificate_profile_onboarding.py``).
         bank_certificate_verifier: If given, validates the bank's certificates during HPB.
+        version_policy: Whether a download must deliver the message version its BTF
+            requested; the default accepts any (see ``10_strict_message_version.py``).
 
     Returns:
         A client configured for the bank and subscriber in the environment, with the
@@ -82,23 +97,33 @@ def client_from_env(
     )
     if certificate_provider is None:
         # Fall through to the library's own default provider rather than overriding it.
-        return Client(bank, user, keyring, bank_certificate_verifier=bank_certificate_verifier)
+        return Client(
+            bank,
+            user,
+            keyring,
+            bank_certificate_verifier=bank_certificate_verifier,
+            version_policy=version_policy,
+        )
     return Client(
         bank,
         user,
         keyring,
         certificate_provider=certificate_provider,
         bank_certificate_verifier=bank_certificate_verifier,
+        version_policy=version_policy,
     )
 
 
-def online_client() -> Client:
+def online_client(*, version_policy: VersionPolicy = VersionPolicy.ACCEPT_ANY) -> Client:
     """Build a client and run HPB so it is ready to download or upload.
 
     A fresh process holds none of the bank's keys, so every download/upload needs an HPB
     first. This runs it, pinning the downloaded keys to ``EBICS_BANK_X002_HASH`` /
     ``EBICS_BANK_E002_HASH`` when both are set (the safe default — an unpinned HPB trusts
     whatever the wire delivers).
+
+    Args:
+        version_policy: Passed on to :func:`client_from_env`.
 
     Returns:
         A client whose :attr:`~ebicsclient.Client.bank_keys` are populated.
@@ -107,7 +132,7 @@ def online_client() -> Client:
         KeyError: a required ``EBICS_*`` variable is missing.
         BankKeyMismatchError: the downloaded keys did not match the pinned hashes.
     """
-    client = client_from_env()
+    client = client_from_env(version_policy=version_policy)
     client.hpb(pinned=_pinned_hashes())
     return client
 

@@ -49,7 +49,9 @@ The certificate-based (*mit Zertifikaten*) profile is a constructor option — s
 [docs/11-certificate-profiles.md](https://github.com/schulluk/ebicsclient/blob/main/docs/11-certificate-profiles.md).
 
 More worked examples — a non-acking peek, a consume-safe sync, a dated backfill, a payment
-round-trip, certificate-profile onboarding, and key rotation — are in
+round-trip, certificate-profile onboarding, key rotation, incoming payments resolved to
+their invoices, bank discovery (HEV, HPD, HTD, HAA), the bank's log of EBICS actions (HAC)
+and the strict message-version policy — are in
 [examples/](https://github.com/schulluk/ebicsclient/blob/main/examples/README.md).
 
 > ### ⚠️ Loading EBICS identifiers from a config file? Quote them.
@@ -73,8 +75,14 @@ that the bank delivered the requested message version (`VersionPolicy.STRICT`); 
 registered data (HTD/HKD), parameters (HPD) and supported versions (HEV). Interrupted transfers resume within their transaction (EBICS recovery), and an upload
 whose final answer stays lost is reported as unconfirmed, never as safe to retry. Read and
 write are validated live against ZKB and the PostFinance test platform. Pure Python (`cryptography`, `lxml`), no PHP/Java
-sidecar. Not yet built: multi-person signatures (EDS/VEU) and several administrative order
-types. What is implemented but not yet validated against a bank is kept apart in
+sidecar. In numbers: 15 of the 22 H005 order types, and 47 of the 68 capabilities tracked
+in docs/13 in full plus 6 in part: reads 24 of 28, writes 9 of 13, multi-person signatures
+(EDS/VEU) 0 of 7. Everything the standard requires unconditionally is implemented; what is
+missing is optional in the standard, above all EDS, which waits for a test environment
+with several required signatures. If you can provide access to one, please open an
+[issue](https://github.com/schulluk/ebicsclient/issues) or write to the maintainer via
+[ebicsclient.miniapps.ch](https://ebicsclient.miniapps.ch); with it, EDS gets built and
+validated. What is implemented but not yet validated against a bank is kept apart in
 `ebicsclient.experimental`.
 
 Full capability-by-capability coverage, gaps, and verification status:
