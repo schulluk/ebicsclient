@@ -62,6 +62,30 @@ and 1.3.1 were never published.
 
 ### Changed
 
+- Requests now name the bank's keys the way EBICS 3.0 defines it. `BankPubKeyDigests` in
+  every request header and `EncryptionPubKeyDigest` in every upload carry the SHA-256 of the
+  bank's X002 and E002 certificates in DER form (spec 5.5.1.1.1, 5.6.1.1.1, 11.3.2.2), as
+  delivered by HPB. Until now they carried the EBICS 2.x hash of the public key, which the
+  spec keeps only for a key a bank still delivers without a certificate; such a bare key is
+  still named that way. `BankKeys` therefore keeps the certificates HPB delivered
+  (`authentication_certificate`, `encryption_certificate`, `None` for a bare key), and
+  `ebicsclient.protocol.h005.parse_hpb_response()` returns a `BankKeys`. Pinning
+  (`Client.hpb(pinned=…)`, `bank_key_hashes()`) still works with the public-key hashes, the
+  form of the "mit Schlüsseln" values banks publish; the next entry adds the certificate
+  form. Validated live against the ZKB test platform, which accepts both forms: downloads
+  and a pain.001 upload with the certificate hashes were accepted, as uploads with the
+  public-key hash were throughout.
+- HPB pinning accepts a bank's published certificate hash as well as its public-key hash.
+  EBICS 3.0 banks publish the SHA-256 of each bank certificate in DER form (spec 4.6.2,
+  5.5.1.1.1), and until now `Client.hpb(pinned=…)` compared only the EBICS 2.x hash of the
+  public key, so such a published value could not be pinned. Each value of a `BankKeyHashes`
+  now matches the delivered key when it equals either its public-key hash or the hash of the
+  certificate HPB delivered for it; a key delivered without a certificate matches the
+  public-key hash only. `bank_key_hashes()` still returns the public-key form, so stored
+  pins stay valid, and the comparison now runs in constant time (`hmac.compare_digest`).
+  The `hpb` step of `examples/zkb_handshake.py` prints both forms of each bank key's hash
+  and reports which one the expected value matched. Validated live against the ZKB test
+  platform: an HPB pinned to the certificate hash ZKB publishes for it was accepted.
 - A download fails closed with `ProtocolError` when the bank answers a segment request with
   another segment than the one requested, or sends different data for a segment the second
   time.

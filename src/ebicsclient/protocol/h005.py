@@ -266,8 +266,8 @@ def parse_hpb_response(
     response: bytes,
     keyring: Keyring,
     bank_certificate_verifier: BankCertificateVerifier | None = None,
-) -> tuple[rsa.RSAPublicKey, rsa.RSAPublicKey]:
-    """Decrypt an HPB response and extract the bank's public keys.
+) -> BankKeys:
+    """Decrypt an HPB response and extract the bank's public keys and their certificates.
 
     Args:
         response: The raw ``ebicsKeyManagementResponse`` bytes from the bank.
@@ -277,7 +277,11 @@ def parse_hpb_response(
             chain validation; the caller must still verify the published hashes out of band.
 
     Returns:
-        The bank's authentication (X002) and encryption (E002) public keys, in that order.
+        The bank's authentication (X002) and encryption (E002) public keys, each with the
+        certificate that carried it. The certificate is ``None`` for a key the bank
+        delivered bare (an ``RSAKeyValue`` carried over from EBICS 2.x); later requests then
+        name that key by its public-key hash instead of the certificate's SHA-256 (spec
+        11.3.2.2).
 
     Raises:
         ProtocolError: the response could not be parsed or is missing required elements.
@@ -292,20 +296,24 @@ def parse_hpb_response(
     order_data = crypto.decrypt_order_data(
         keyring.encryption, transaction_key, encrypted_order_data
     )
-    bank_keys = _parse(order_data)
-    return (
-        _public_key_from_info(
-            bank_keys,
-            "AuthenticationPubKeyInfo",
-            keys.CertificateUsage.AUTHENTICATION,
-            bank_certificate_verifier,
-        ),
-        _public_key_from_info(
-            bank_keys,
-            "EncryptionPubKeyInfo",
-            keys.CertificateUsage.ENCRYPTION,
-            bank_certificate_verifier,
-        ),
+    bank_key_info = _parse(order_data)
+    authentication, authentication_certificate = _public_key_from_info(
+        bank_key_info,
+        "AuthenticationPubKeyInfo",
+        keys.CertificateUsage.AUTHENTICATION,
+        bank_certificate_verifier,
+    )
+    encryption, encryption_certificate = _public_key_from_info(
+        bank_key_info,
+        "EncryptionPubKeyInfo",
+        keys.CertificateUsage.ENCRYPTION,
+        bank_certificate_verifier,
+    )
+    return BankKeys(
+        authentication=authentication,
+        encryption=encryption,
+        authentication_certificate=authentication_certificate,
+        encryption_certificate=encryption_certificate,
     )
 
 
@@ -875,21 +883,36 @@ def _append_btd_order_params(
 
 
 def _append_bank_pub_key_digests(static: etree._Element, bank_keys: BankKeys) -> None:
+    # The bank checks these digests against its current keys in every transaction but INI,
+    # HIA and HPB, and ends a stale one with EBICS_BANK_PUBKEY_UPDATE_REQUIRED (spec 4.6.2).
     digests = etree.SubElement(static, etree.QName(NAMESPACE, "BankPubKeyDigests"))
     authentication = _text(
         digests,
         "Authentication",
-        base64.b64encode(keys.public_key_hash(bank_keys.authentication)).decode("ascii"),
+        _bank_key_digest(bank_keys.authentication, bank_keys.authentication_certificate),
     )
     authentication.set("Version", _AUTHENTICATION_VERSION)
     authentication.set("Algorithm", _SHA256_ALGORITHM)
     encryption = _text(
         digests,
         "Encryption",
-        base64.b64encode(keys.public_key_hash(bank_keys.encryption)).decode("ascii"),
+        _bank_key_digest(bank_keys.encryption, bank_keys.encryption_certificate),
     )
     encryption.set("Version", _ENCRYPTION_VERSION)
     encryption.set("Algorithm", _SHA256_ALGORITHM)
+
+
+def _bank_key_digest(public_key: rsa.RSAPublicKey, certificate: x509.Certificate | None) -> str:
+    # The base64 digest by which a request names one bank key, in BankPubKeyDigests and in
+    # EncryptionPubKeyDigest. EBICS 3.0.2 defines it as the SHA-256 over the bank certificate
+    # in DER form (spec 5.5.1.1.1, 5.6.1.1.1, 11.3.2.2). A key the bank delivered without a
+    # certificate was carried over from EBICS 2.x and keeps the hash over the public key
+    # (spec 11.3.2.2). Both forms are accepted by the ZKB test platform (docs/12).
+    if certificate is None:
+        digest = keys.public_key_hash(public_key)
+    else:
+        digest = keys.certificate_fingerprint(certificate)
+    return base64.b64encode(digest).decode("ascii")
 
 
 def build_download_transfer_request(
@@ -1256,7 +1279,7 @@ def _upload_initialisation_request(
     digest = _text(
         encryption_info,
         "EncryptionPubKeyDigest",
-        base64.b64encode(keys.public_key_hash(bank_keys.encryption)).decode("ascii"),
+        _bank_key_digest(bank_keys.encryption, bank_keys.encryption_certificate),
     )
     digest.set("Version", _ENCRYPTION_VERSION)
     digest.set("Algorithm", _SHA256_ALGORITHM)
@@ -1576,7 +1599,7 @@ def _public_key_from_info(
     info_tag: str,
     usage: keys.CertificateUsage,
     verifier: BankCertificateVerifier | None,
-) -> rsa.RSAPublicKey:
+) -> tuple[rsa.RSAPublicKey, x509.Certificate | None]:
     info = root.find(f".//{{{NAMESPACE}}}{info_tag}")
     if info is None:
         raise ProtocolError(f"HPB response is missing <{info_tag}>")
@@ -1584,22 +1607,26 @@ def _public_key_from_info(
     # xmldsig schema X509Data may legally omit the X509Certificate element — so read the
     # certificate when present (the norm) and fall back to a bare RSA key value otherwise.
     # With a verifier configured there is nothing to verify without a certificate: refuse.
-    certificate = info.findtext(f".//{{{_DS}}}X509Certificate")
-    if certificate is not None:
-        public_key = _public_key_from_certificate(certificate, info_tag, usage, verifier)
+    # The certificate is kept: later requests name the key by the certificate's SHA-256.
+    certificate_base64 = info.findtext(f".//{{{_DS}}}X509Certificate")
+    certificate: x509.Certificate | None
+    if certificate_base64 is not None:
+        public_key, certificate = _public_key_from_certificate(
+            certificate_base64, info_tag, usage, verifier
+        )
     elif verifier is not None:
         # A verifier was required but the bank sent a bare key with no certificate to check.
         raise ProtocolError(
             f"HPB response <{info_tag}> carries no certificate to verify"
         )
     else:
-        public_key = _public_key_from_rsa_key_value(info, info_tag)
+        public_key, certificate = _public_key_from_rsa_key_value(info, info_tag), None
     if public_key.key_size < _MINIMUM_BANK_KEY_BITS:
         raise ProtocolError(
             f"HPB response <{info_tag}> carries a {public_key.key_size}-bit RSA key, below "
             f"the EBICS minimum of {_MINIMUM_BANK_KEY_BITS} bits — refusing to trust it"
         )
-    return public_key
+    return public_key, certificate
 
 
 def _public_key_from_certificate(
@@ -1607,7 +1634,7 @@ def _public_key_from_certificate(
     info_tag: str,
     usage: keys.CertificateUsage,
     verifier: BankCertificateVerifier | None,
-) -> rsa.RSAPublicKey:
+) -> tuple[rsa.RSAPublicKey, x509.Certificate]:
     try:
         certificate = x509.load_der_x509_certificate(base64.b64decode(certificate_base64))
     except ValueError as error:
@@ -1617,7 +1644,7 @@ def _public_key_from_certificate(
     public_key = certificate.public_key()
     if not isinstance(public_key, rsa.RSAPublicKey):
         raise ProtocolError(f"HPB response <{info_tag}> certificate does not hold an RSA key")
-    return public_key
+    return public_key, certificate
 
 
 def _public_key_from_rsa_key_value(info: etree._Element, info_tag: str) -> rsa.RSAPublicKey:

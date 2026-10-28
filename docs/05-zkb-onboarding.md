@@ -114,13 +114,26 @@ Contact: **support.epayment@zkb.ch / +41 44 293 99 15** (Kompetenzcenter Service
 - Confirm **plain keys** ("mit Schlüsseln") are fine for download-only — assume yes, proceed.
 - Profile **T** (no distributed signature) — irrelevant since download-only.
 
-## Production watch-item: `BankPubKeyDigests` hash format
+## Bank-key digests: certificate hash since 2026-10-27 (was a production watch-item)
 
-The EBICS 3.0 spec (section 5.5.1.1) defines the `BankPubKeyDigests` values in requests as the
-SHA-256 over the bank **certificate's DER** — but this client sends the EBICS 2.x public-key
-(`exponent modulus`) digest, and the ZKB **test platform accepted that in every live
-transaction** (downloads and uploads). ZKB's published Bankparameterdaten hashes are also
-public-key hashes, so HPB pinning stays in the `e m` format. If ZKB **production** ever rejects
-requests with `EBICS_BANK_PUBKEY_UPDATE_REQUIRED` despite fresh HPB keys, this mismatch is the
-first suspect: the fix is to retain the bank *certificates* from the HPB response and send
-their DER SHA-256 fingerprints instead.
+The EBICS 3.0.2 spec (sections 5.5.1.1.1, 5.6.1.1.1, 11.3.2.2) defines the `BankPubKeyDigests`
+and `EncryptionPubKeyDigest` values in requests as the SHA-256 over the bank **certificate's
+DER**; only a key carried over from 2.x without a certificate keeps the public-key hash. Until
+2026-10-27 this client sent the EBICS 2.x public-key (`exponent modulus`) digest in both places.
+It now keeps the certificates HPB delivers (`BankKeys`) and sends their DER SHA-256; a key a bank
+delivers bare still gets the public-key hash.
+
+The ZKB **test platform accepts both forms** (probes of 2026-10-27, exchanges recorded under
+`local/digest-probes/`): every transaction until then carried the `e m` digest, and HTDs with
+the SHA-256 over the DER of the certificates HPB delivers (one self-signed certificate for X002
+and E002) were accepted the same way, `000000` and a positive receipt. The two hashes ZKB
+publishes for the test platform, "mit Schlüsseln" and "mit Zertifikaten", are exactly these two
+digests of that one key, and `Client.hpb(pinned=…)` accepts either of them (`local/.env` pins
+the `e m` form; an HPB pinned to the "mit Zertifikaten" value was accepted on 2026-10-28). A
+pain.001 upload whose `EncryptionPubKeyDigest` carried the certificate form was accepted on
+2026-10-28 as well.
+
+If ZKB **production**, or another bank, rejects requests with `EBICS_BANK_PUBKEY_UPDATE_REQUIRED`
+despite fresh HPB keys, the bank's keys have changed, or the bank expects the public-key hash for
+a key it delivers as a certificate, against the spec; the recorded request shows which digest
+was sent.

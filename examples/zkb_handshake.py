@@ -49,8 +49,9 @@ Optional:
 
     EBICS_ENV_FILE           dotenv file to load (default: ../local/.env)
     EBICS_LETTER_PATH         output path for the letter (default: ./ini-letter)
-    EBICS_BANK_X002_HASH      expected bank X002 hash, to verify HPB (spaces/case ignored)
-    EBICS_BANK_E002_HASH      expected bank E002 hash, to verify HPB
+    EBICS_BANK_X002_HASH      expected bank X002 hash, to verify HPB (spaces/case ignored);
+                              the public-key hash or the certificate hash the bank publishes
+    EBICS_BANK_E002_HASH      expected bank E002 hash, to verify HPB (either form likewise)
     EBICS_DOWNLOAD_PATH       where `download` writes the raw order data (default: none)
     EBICS_UPLOAD_PATH         path to the pain.001 file that `upload` sends
 """
@@ -61,6 +62,7 @@ import os
 import sys
 from pathlib import Path
 
+from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import load_dotenv
 
@@ -75,6 +77,7 @@ from ebicsclient import (
     KeyRotation,
     OutputFormat,
     User,
+    certificate_fingerprint,
     generate_keyring,
     load_keyring,
     public_key_hash,
@@ -153,9 +156,19 @@ def _letter() -> int:
 
 def _hpb() -> int:
     bank_keys = _fetch_bank_keys(_build_client())
-    print("HPB succeeded. Verify the bank's public-key hashes below.")
-    _report_hash("Bank authentication (X002)", bank_keys.authentication, "EBICS_BANK_X002_HASH")
-    _report_hash("Bank encryption    (E002)", bank_keys.encryption, "EBICS_BANK_E002_HASH")
+    print("HPB succeeded. Verify the bank's key hashes below against the values it publishes.")
+    _report_hash(
+        "Bank authentication (X002)",
+        bank_keys.authentication,
+        bank_keys.authentication_certificate,
+        "EBICS_BANK_X002_HASH",
+    )
+    _report_hash(
+        "Bank encryption    (E002)",
+        bank_keys.encryption,
+        bank_keys.encryption_certificate,
+        "EBICS_BANK_E002_HASH",
+    )
     return 0
 
 
@@ -376,15 +389,31 @@ def _print_own_hashes(keyring: Keyring) -> None:
         print(f"  {label}: {_grouped(public_key_hash(private_key.public_key()))}")
 
 
-def _report_hash(label: str, public_key: rsa.RSAPublicKey, env_name: str) -> None:
-    actual = public_key_hash(public_key)
-    print(f"  {label}: {_grouped(actual)}")
+def _report_hash(
+    label: str,
+    public_key: rsa.RSAPublicKey,
+    certificate: x509.Certificate | None,
+    env_name: str,
+) -> None:
+    """Print a bank key's hash in each published form and whether the expected value matches one.
+
+    A bank publishes the public-key hash (the ``e m`` form) or, in EBICS 3.0, the SHA-256 of
+    the key's certificate in DER form; ZKB publishes both for the same key. A key the bank
+    delivered without a certificate has the public-key form only.
+    """
+    forms = [("public-key hash", public_key_hash(public_key))]
+    if certificate is not None:
+        forms.append(("certificate hash", certificate_fingerprint(certificate)))
+    print(f"  {label}:")
+    for form_name, digest in forms:
+        print(f"    {form_name:<16} {_grouped(digest)}")
     expected = os.environ.get(env_name)
     if expected is None:
-        print(f"    (set {env_name} to verify this automatically)")
+        print(f"    (set {env_name} to either value to verify this automatically)")
         return
-    if _normalise(expected) == actual.hex():
-        print("    MATCH — the bank key is authentic.")
+    matching = [form_name for form_name, digest in forms if _normalise(expected) == digest.hex()]
+    if matching:
+        print(f"    MATCH ({matching[0]}) — the bank key is authentic.")
     else:
         print("    MISMATCH — do NOT trust this key; investigate before continuing.")
 

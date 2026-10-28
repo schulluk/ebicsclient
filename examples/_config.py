@@ -19,8 +19,9 @@ credentials. The required variables are:
 Optional:
 
     EBICS_ENV_FILE           dotenv file to load (default: ../local/.env)
-    EBICS_BANK_X002_HASH      expected bank X002 hash, to pin HPB (spaces/case ignored)
-    EBICS_BANK_E002_HASH      expected bank E002 hash, to pin HPB
+    EBICS_BANK_X002_HASH      expected bank X002 hash, to pin HPB (spaces/case ignored); the
+                              public-key hash or the certificate hash the bank publishes
+    EBICS_BANK_E002_HASH      expected bank E002 hash, to pin HPB (either form likewise)
 """
 
 import os

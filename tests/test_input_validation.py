@@ -29,7 +29,7 @@ from ebicsclient import (
     save_keyring,
 )
 from ebicsclient.errors import CertificateError, KeyringError, TransportError
-from ebicsclient.keys import CertificateUsage
+from ebicsclient.keys import CertificateUsage, generate_self_signed_certificate
 from ebicsclient.models import PAIN_001
 from ebicsclient.transport import Transport
 
@@ -82,6 +82,33 @@ def test_bank_keys_reject_private_keys() -> None:
     keys = generate_keyring()
     with pytest.raises(TypeError):
         BankKeys(authentication=keys.authentication, encryption=keys.encryption)  # type: ignore[arg-type]
+
+
+def test_bank_keys_reject_a_certificate_that_is_not_one() -> None:
+    bank = generate_keyring()
+    with pytest.raises(TypeError) as caught:
+        BankKeys(
+            authentication=bank.authentication.public_key(),
+            encryption=bank.encryption.public_key(),
+            authentication_certificate="-----BEGIN CERTIFICATE-----",  # type: ignore[arg-type]
+        )
+    assert "authentication_certificate must be an x509.Certificate" in str(caught.value)
+
+
+def test_bank_keys_reject_a_certificate_for_another_key() -> None:
+    # The request digests are computed over the certificate (spec 5.5.1.1.1); a certificate
+    # for a different key would name a key the bank does not hold. Fail at construction.
+    bank = generate_keyring()
+    other = generate_keyring()
+    with pytest.raises(ValueError) as caught:
+        BankKeys(
+            authentication=bank.authentication.public_key(),
+            encryption=bank.encryption.public_key(),
+            encryption_certificate=generate_self_signed_certificate(
+                other.encryption, "BANK", CertificateUsage.ENCRYPTION
+            ),
+        )
+    assert "encryption_certificate does not certify the encryption key" in str(caught.value)
 
 
 def test_bank_key_hashes_reject_a_hex_string() -> None:

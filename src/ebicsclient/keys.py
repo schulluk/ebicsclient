@@ -307,17 +307,21 @@ def certificate_fingerprint(certificate: x509.Certificate) -> bytes:
 
 
 def bank_key_hashes(bank_keys: BankKeys) -> BankKeyHashes:
-    """Compute the pinning hashes for a bank's public keys.
+    """Compute the pinning hashes for a bank's public keys, in the public-key form.
 
     A convenience for trust-on-first-use pinning: after a first HPB, hash the returned keys,
     persist the two hashes, and pass them back to :meth:`ebicsclient.Client.hpb` on later runs
-    to detect any change in the bank's keys.
+    to detect any change in the bank's keys. The values are the hashes of the public keys
+    themselves (:func:`public_key_hash`), not of the certificates HPB delivered, so they name
+    the key whatever certificate carries it. :meth:`~ebicsclient.Client.hpb` accepts a bank's
+    published certificate hash (spec 5.5.1.1.1; :func:`certificate_fingerprint`) as a pinned
+    value as well: pass it in a :class:`~ebicsclient.BankKeyHashes` directly.
 
     Args:
         bank_keys: The bank's public keys (from HPB).
 
     Returns:
-        The SHA-256 hashes of the authentication (X002) and encryption (E002) keys.
+        The SHA-256 public-key hashes of the authentication (X002) and encryption (E002) keys.
     """
     return BankKeyHashes(
         authentication=public_key_hash(bank_keys.authentication),

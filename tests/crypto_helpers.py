@@ -229,14 +229,17 @@ def make_hpb_response(
     *,
     host_id: str = "HOST1",
     certificates: Mapping[CertificateUsage, x509.Certificate] | None = None,
+    bare_keys: bool = False,
 ) -> bytes:
     """Build an OK HPB response carrying the bank's keys, encrypted to the subscriber.
 
     By default the bank keys are wrapped in self-signed certificates (the "mit Schlüsseln"
     profile). Pass ``certificates`` (keyed by usage) to embed CA-issued certificates instead,
-    to exercise the "mit Zertifikaten" verification path.
+    to exercise the "mit Zertifikaten" verification path. ``bare_keys=True`` sends each key
+    as an ``RSAKeyValue`` without a certificate, as a bank does for keys carried over from
+    EBICS 2.x (spec 11.3.2.2).
     """
-    order_data = _hpb_order_data(bank_keyring, host_id, certificates)
+    order_data = _hpb_order_data(bank_keyring, host_id, certificates, bare_keys)
     transaction_key, encrypted = encrypt_order_data(
         subscriber_keyring.encryption.public_key(), order_data
     )
@@ -267,6 +270,7 @@ def _hpb_order_data(
     bank_keyring: Keyring,
     host_id: str,
     certificates: Mapping[CertificateUsage, x509.Certificate] | None,
+    bare_keys: bool = False,
 ) -> bytes:
     namespace = h005.NAMESPACE
     certificates = certificates or {}
@@ -277,11 +281,13 @@ def _hpb_order_data(
         root, "AuthenticationPubKeyInfo", "AuthenticationVersion", "X002",
         bank_keyring.authentication, CertificateUsage.AUTHENTICATION,
         certificates.get(CertificateUsage.AUTHENTICATION),
+        bare_key=bare_keys,
     )
     _pub_key_info(
         root, "EncryptionPubKeyInfo", "EncryptionVersion", "E002",
         bank_keyring.encryption, CertificateUsage.ENCRYPTION,
         certificates.get(CertificateUsage.ENCRYPTION),
+        bare_key=bare_keys,
     )
     etree.SubElement(root, etree.QName(namespace, "HostID")).text = host_id
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
@@ -295,13 +301,29 @@ def _pub_key_info(
     private_key: rsa.RSAPrivateKey,
     usage: CertificateUsage,
     certificate: x509.Certificate | None = None,
+    *,
+    bare_key: bool = False,
 ) -> None:
-    # H005 carries the bank key as an X.509 certificate, so the fixtures do too.
+    # H005 carries the bank key as an X.509 certificate, so the fixtures do too — unless a
+    # bare RSAKeyValue is asked for, the form of a key carried over from EBICS 2.x.
     namespace = h005.NAMESPACE
-    if certificate is None:
-        certificate = generate_self_signed_certificate(private_key, "BANK", usage)
-    encoded = base64.b64encode(certificate.public_bytes(Encoding.DER)).decode("ascii")
     info = etree.SubElement(parent, etree.QName(namespace, info_tag))
-    x509_data = etree.SubElement(info, etree.QName(_DS, "X509Data"))
-    etree.SubElement(x509_data, etree.QName(_DS, "X509Certificate")).text = encoded
+    if bare_key:
+        numbers = private_key.public_key().public_numbers()
+        key_value = etree.SubElement(
+            etree.SubElement(info, etree.QName(namespace, "PubKeyValue")),
+            etree.QName(_DS, "RSAKeyValue"),
+        )
+        etree.SubElement(key_value, etree.QName(_DS, "Modulus")).text = _base64_integer(numbers.n)
+        etree.SubElement(key_value, etree.QName(_DS, "Exponent")).text = _base64_integer(numbers.e)
+    else:
+        if certificate is None:
+            certificate = generate_self_signed_certificate(private_key, "BANK", usage)
+        encoded = base64.b64encode(certificate.public_bytes(Encoding.DER)).decode("ascii")
+        x509_data = etree.SubElement(info, etree.QName(_DS, "X509Data"))
+        etree.SubElement(x509_data, etree.QName(_DS, "X509Certificate")).text = encoded
     etree.SubElement(info, etree.QName(namespace, version_tag)).text = version
+
+
+def _base64_integer(value: int) -> str:
+    return base64.b64encode(value.to_bytes((value.bit_length() + 7) // 8, "big")).decode("ascii")

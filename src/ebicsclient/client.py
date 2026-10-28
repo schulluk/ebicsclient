@@ -6,10 +6,14 @@ fetching the bank's keys (HPB) and downloading statements.
 """
 
 import base64
+import hmac
 import logging
 import time
 from collections.abc import Callable, Sequence
 from typing import TypeVar
+
+from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from ebicsclient import crypto, keys, letter
 from ebicsclient.certificates import (
@@ -86,6 +90,42 @@ _RECOVERY_DELAY_SECONDS = 1.0
 
 
 _Parsed = TypeVar("_Parsed")
+
+
+def _bank_key_delivery(certificate: x509.Certificate | None) -> str:
+    # How HPB delivered a bank key decides how later requests name it (spec 11.3.2.2).
+    if certificate is None:
+        return "as a bare key (requests carry its public-key hash)"
+    return "as a certificate (requests carry the certificate's SHA-256)"
+
+
+def _pinned_hash_matches(
+    public_key: rsa.RSAPublicKey, certificate: x509.Certificate | None, pinned: bytes
+) -> bool:
+    """Whether a pinned hash names a bank key in either form a bank publishes it in.
+
+    A bank makes the hash of each key available over a second channel for this comparison
+    (spec 4.4.2.1, 4.6.2), either as the EBICS 2.x hash of the public key (``e m``,
+    :func:`~ebicsclient.public_key_hash`, what banks print for the key-based profile) or,
+    as EBICS 3.0 defines the hash value of a key, as the SHA-256 over the key's certificate
+    in DER form (spec 5.5.1.1.1 and glossary; :func:`~ebicsclient.certificate_fingerprint`).
+    The certificate form can only match a key HPB delivered as a certificate: a key carried
+    over from 2.x comes bare (spec 11.3.2.2).
+
+    Args:
+        public_key: The bank key HPB delivered.
+        certificate: The certificate that carried it, or ``None`` for a bare key.
+        pinned: The 32-byte SHA-256 value the caller pinned for this key.
+
+    Returns:
+        ``True`` if ``pinned`` equals the hash of the key in one of its published forms.
+    """
+    forms = [keys.public_key_hash(public_key)]
+    if certificate is not None:
+        forms.append(keys.certificate_fingerprint(certificate))
+    # Constant-time comparisons, each of them run (no short-circuit on the first match).
+    matches = [hmac.compare_digest(form, pinned) for form in forms]
+    return any(matches)
 
 
 def _answer_lost(error: EbicsError) -> bool:
@@ -446,15 +486,23 @@ class Client:
 
         Sends a signed HPB request, decrypts the response with the E002 key, and stores
         the bank's authentication (X002) and encryption (E002) public keys on the client
-        (also available via :attr:`bank_keys`). Verify their hashes against the values the
-        bank publishes out of band before trusting them.
+        (also available via :attr:`bank_keys`), together with the certificates that
+        carried them: every later request names the bank keys by the SHA-256 of those
+        certificates (spec 5.5.1.1.1, 11.3.2.2), or by the public-key hash for a key the
+        bank delivered bare. Verify the keys' hashes against the values the bank publishes
+        out of band before trusting them.
 
         Args:
-            pinned: If given, the downloaded keys must hash to these values or
-                :class:`~ebicsclient.errors.BankKeyMismatchError` is raised. Pin to a
-                previously trusted set (:func:`~ebicsclient.bank_key_hashes` after a first
-                HPB, persisted by you) or to the bank's published hashes. ``None`` disables
-                pinning.
+            pinned: If given, each downloaded key must hash to its pinned value or
+                :class:`~ebicsclient.errors.BankKeyMismatchError` is raised and no key is
+                stored. A pinned value may be either form a bank publishes for a key over
+                its second channel (spec 4.4.2.1, 4.6.2): the hash of the public key itself
+                (``e m``; what :func:`~ebicsclient.bank_key_hashes` returns after a first HPB,
+                persisted by you, and what banks print for the key-based "mit Schlüsseln"
+                profile), or the SHA-256 of the key's certificate in DER form, which is what
+                EBICS 3.0 means by the hash value of a key (spec 5.5.1.1.1;
+                :func:`~ebicsclient.certificate_fingerprint`). The certificate form matches
+                only a key HPB delivered as a certificate. ``None`` disables pinning.
 
         Returns:
             The bank's public keys.
@@ -468,22 +516,46 @@ class Client:
         """
         logger.info("HPB: requesting the bank's public keys from host %s", self._bank.host_id)
         request = h005.build_hpb_request(self._bank, self._user, self._keyring)
-        authentication, encryption = h005.parse_hpb_response(
+        bank_keys = h005.parse_hpb_response(
             self._transport.post(request), self._keyring, self._bank_certificate_verifier
         )
-        bank_keys = BankKeys(authentication=authentication, encryption=encryption)
         if pinned is not None:
             self._verify_pinned(bank_keys, pinned)
         self._bank_keys = bank_keys
+        logger.info(
+            "HPB: received the bank's X002 key %s and E002 key %s",
+            _bank_key_delivery(bank_keys.authentication_certificate),
+            _bank_key_delivery(bank_keys.encryption_certificate),
+        )
         return self._bank_keys
 
     @staticmethod
     def _verify_pinned(bank_keys: BankKeys, pinned: BankKeyHashes) -> None:
-        actual = keys.bank_key_hashes(bank_keys)
-        if actual != pinned:
-            # The keys are not what we pinned — do not store or trust them.
+        for key_name, public_key, certificate, expected in (
+            (
+                "X002 authentication",
+                bank_keys.authentication,
+                bank_keys.authentication_certificate,
+                pinned.authentication,
+            ),
+            (
+                "E002 encryption",
+                bank_keys.encryption,
+                bank_keys.encryption_certificate,
+                pinned.encryption,
+            ),
+        ):
+            if _pinned_hash_matches(public_key, certificate, expected):
+                continue
+            # The key is not what was pinned: store and trust none of the bank's keys.
+            compared = (
+                "its public-key hash (HPB delivered the key without a certificate)"
+                if certificate is None
+                else "its public-key hash or its certificate hash"
+            )
             raise BankKeyMismatchError(
-                "The bank's HPB keys do not match the pinned hashes; refusing to trust them"
+                f"The bank's {key_name} key from HPB does not match the pinned value as "
+                f"{compared}; refusing to trust the bank's keys"
             )
 
     def download(

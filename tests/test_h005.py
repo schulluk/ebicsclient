@@ -170,11 +170,40 @@ def test_hpb_request_is_signed_and_carries_the_admin_order_type(
 def test_parse_hpb_response_recovers_the_bank_public_keys(keyring: Keyring) -> None:
     bank_keyring = keys.generate_keyring()
     response = make_hpb_response(keyring, bank_keyring)
-    authentication, encryption = h005.parse_hpb_response(response, keyring)
+    bank_keys = h005.parse_hpb_response(response, keyring)
     expected_authentication = bank_keyring.authentication.public_key().public_numbers()
     expected_encryption = bank_keyring.encryption.public_key().public_numbers()
-    assert authentication.public_numbers() == expected_authentication
-    assert encryption.public_numbers() == expected_encryption
+    assert bank_keys.authentication.public_numbers() == expected_authentication
+    assert bank_keys.encryption.public_numbers() == expected_encryption
+
+
+def test_parse_hpb_response_keeps_the_certificates_that_carried_the_keys(
+    keyring: Keyring,
+) -> None:
+    # Later requests name the bank keys by the SHA-256 of these certificates in DER form
+    # (spec 5.5.1.1.1), so the certificates the bank sent must survive parsing byte for byte.
+    bank_keyring = keys.generate_keyring()
+    bank_keys = h005.parse_hpb_response(make_hpb_response(keyring, bank_keyring), keyring)
+    authentication_certificate, encryption_certificate = _bank_certificates(bank_keyring)
+    assert bank_keys.authentication_certificate == authentication_certificate
+    assert bank_keys.encryption_certificate == encryption_certificate
+
+
+def test_parse_hpb_response_keeps_no_certificate_for_a_bare_key(keyring: Keyring) -> None:
+    # A bank whose keys were carried over from EBICS 2.x may still deliver them as a bare
+    # RSAKeyValue (spec 11.3.2.2): the key is read, and no certificate is invented for it.
+    bank_keyring = keys.generate_keyring()
+    bank_keys = h005.parse_hpb_response(
+        make_hpb_response(keyring, bank_keyring, bare_keys=True), keyring
+    )
+    assert bank_keys.authentication.public_numbers() == (
+        bank_keyring.authentication.public_key().public_numbers()
+    )
+    assert bank_keys.encryption.public_numbers() == (
+        bank_keyring.encryption.public_key().public_numbers()
+    )
+    assert bank_keys.authentication_certificate is None
+    assert bank_keys.encryption_certificate is None
 
 
 def test_parse_hpb_response_raises_on_a_non_ok_return_code(keyring: Keyring) -> None:
@@ -242,11 +271,16 @@ def test_parse_hpb_response_verifies_bank_certificates_against_a_trust_anchor(
     }
     response = make_hpb_response(keyring, bank_keyring, certificates=certificates)
     verifier = TrustAnchorVerifier([ca_certificate])
-    authentication, encryption = h005.parse_hpb_response(response, keyring, verifier)
-    assert authentication.public_numbers() == (
+    bank_keys = h005.parse_hpb_response(response, keyring, verifier)
+    assert bank_keys.authentication.public_numbers() == (
         bank_keyring.authentication.public_key().public_numbers()
     )
-    assert encryption.public_numbers() == bank_keyring.encryption.public_key().public_numbers()
+    assert bank_keys.encryption.public_numbers() == (
+        bank_keyring.encryption.public_key().public_numbers()
+    )
+    # The CA-issued certificates are what later requests digest, not re-made self-signed ones.
+    assert bank_keys.authentication_certificate == certificates[CertificateUsage.AUTHENTICATION]
+    assert bank_keys.encryption_certificate == certificates[CertificateUsage.ENCRYPTION]
 
 
 def test_parse_hpb_response_rejects_bank_certificates_from_an_untrusted_anchor(
@@ -292,10 +326,11 @@ def test_public_key_from_info_falls_back_to_rsa_key_value(keyring: Keyring) -> N
     )
     etree.SubElement(rsa_key_value, f"{{{_DS}}}Modulus").text = _b64_int(numbers.n)
     etree.SubElement(rsa_key_value, f"{{{_DS}}}Exponent").text = _b64_int(numbers.e)
-    recovered = h005._public_key_from_info(
+    recovered, certificate = h005._public_key_from_info(
         root, "AuthenticationPubKeyInfo", keys.CertificateUsage.AUTHENTICATION, None
     )
     assert recovered.public_numbers() == numbers
+    assert certificate is None
 
 
 def _b64_int(value: int) -> str:
@@ -306,6 +341,128 @@ def _bank_keys_from(bank_keyring: Keyring) -> BankKeys:
     return BankKeys(
         authentication=bank_keyring.authentication.public_key(),
         encryption=bank_keyring.encryption.public_key(),
+    )
+
+
+def _bank_certificates(bank_keyring: Keyring) -> tuple[x509.Certificate, x509.Certificate]:
+    # The deterministic self-signed certificates make_hpb_response embeds by default.
+    return (
+        keys.generate_self_signed_certificate(
+            bank_keyring.authentication, "BANK", CertificateUsage.AUTHENTICATION
+        ),
+        keys.generate_self_signed_certificate(
+            bank_keyring.encryption, "BANK", CertificateUsage.ENCRYPTION
+        ),
+    )
+
+
+def _bank_keys_with_certificates(bank_keyring: Keyring) -> BankKeys:
+    authentication_certificate, encryption_certificate = _bank_certificates(bank_keyring)
+    return BankKeys(
+        authentication=bank_keyring.authentication.public_key(),
+        encryption=bank_keyring.encryption.public_key(),
+        authentication_certificate=authentication_certificate,
+        encryption_certificate=encryption_certificate,
+    )
+
+
+def _base64_text(digest: bytes) -> str:
+    return base64.b64encode(digest).decode("ascii")
+
+
+def test_download_initialisation_request_names_bank_certificates_by_their_der_hash(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    # Spec 5.6.1.1.1: BankPubKeyDigests carries the SHA-256 of the bank's X002 and E002
+    # certificates in DER form, each with the key's EBICS version and the hash algorithm URI.
+    bank_keyring = keys.generate_keyring()
+    authentication_certificate, encryption_certificate = _bank_certificates(bank_keyring)
+    request = h005.build_download_initialisation_request(
+        bank, user, keyring, _bank_keys_with_certificates(bank_keyring), CAMT_053
+    )
+    digests = etree.fromstring(request).find(f".//{{{_NS}}}BankPubKeyDigests")
+    assert digests is not None
+    authentication = digests.find(f"{{{_NS}}}Authentication")
+    encryption = digests.find(f"{{{_NS}}}Encryption")
+    assert authentication is not None
+    assert encryption is not None
+    assert authentication.text == _base64_text(
+        keys.certificate_fingerprint(authentication_certificate)
+    )
+    assert encryption.text == _base64_text(keys.certificate_fingerprint(encryption_certificate))
+    assert authentication.get("Version") == "X002"
+    assert encryption.get("Version") == "E002"
+    assert authentication.get("Algorithm") == "http://www.w3.org/2001/04/xmlenc#sha256"
+    assert encryption.get("Algorithm") == "http://www.w3.org/2001/04/xmlenc#sha256"
+
+
+def test_download_initialisation_request_names_bare_bank_keys_by_their_public_key_hash(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    # Spec 11.3.2.2: a key used without a certificate in EBICS 2.x and carried over to 3.0
+    # keeps the hash over the public key, so bank keys without certificates are named that way.
+    bank_keys = _bank_keys_from(keys.generate_keyring())
+    request = h005.build_download_initialisation_request(bank, user, keyring, bank_keys, CAMT_053)
+    digests = etree.fromstring(request).find(f".//{{{_NS}}}BankPubKeyDigests")
+    assert digests is not None
+    assert digests.findtext(f"{{{_NS}}}Authentication") == _base64_text(
+        keys.public_key_hash(bank_keys.authentication)
+    )
+    assert digests.findtext(f"{{{_NS}}}Encryption") == _base64_text(
+        keys.public_key_hash(bank_keys.encryption)
+    )
+
+
+def test_upload_initialisation_request_names_the_bank_encryption_certificate_by_its_der_hash(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    # Spec 11.3.2.2: EncryptionPubKeyDigest is the SHA-256 of the bank's E002 certificate in
+    # DER form, beside the encryption version and the hash algorithm; the header digests
+    # (spec 5.5.1.1.1) follow the same rule.
+    bank_keyring = keys.generate_keyring()
+    _, encryption_certificate = _bank_certificates(bank_keyring)
+    bank_keys = _bank_keys_with_certificates(bank_keyring)
+    payload = h005.prepare_upload(user, keyring, bank_keys, b"<Document>pay</Document>")
+    root = etree.fromstring(
+        h005.build_upload_initialisation_request(bank, user, keyring, bank_keys, PAIN_001, payload)
+    )
+    digest = root.find(f".//{{{_NS}}}EncryptionPubKeyDigest")
+    assert digest is not None
+    assert digest.text == _base64_text(keys.certificate_fingerprint(encryption_certificate))
+    assert digest.get("Version") == "E002"
+    assert digest.get("Algorithm") == "http://www.w3.org/2001/04/xmlenc#sha256"
+    assert root.findtext(f".//{{{_NS}}}BankPubKeyDigests/{{{_NS}}}Encryption") == digest.text
+
+
+def test_upload_initialisation_request_names_a_bare_bank_key_by_its_public_key_hash(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    bank_keys = _bank_keys_from(keys.generate_keyring())
+    payload = h005.prepare_upload(user, keyring, bank_keys, b"<Document>pay</Document>")
+    root = etree.fromstring(
+        h005.build_upload_initialisation_request(bank, user, keyring, bank_keys, PAIN_001, payload)
+    )
+    assert root.findtext(f".//{{{_NS}}}EncryptionPubKeyDigest") == _base64_text(
+        keys.public_key_hash(bank_keys.encryption)
+    )
+
+
+def test_suspension_request_names_the_bank_keys_like_every_upload(
+    bank: Bank, user: User, keyring: Keyring
+) -> None:
+    # SPR and the key changes share the upload initialisation, so they carry the same digests.
+    bank_keyring = keys.generate_keyring()
+    authentication_certificate, encryption_certificate = _bank_certificates(bank_keyring)
+    root = etree.fromstring(
+        h005.build_suspension_request(
+            bank, user, keyring, _bank_keys_with_certificates(bank_keyring)
+        )
+    )
+    assert root.findtext(f".//{{{_NS}}}BankPubKeyDigests/{{{_NS}}}Authentication") == (
+        _base64_text(keys.certificate_fingerprint(authentication_certificate))
+    )
+    assert root.findtext(f".//{{{_NS}}}EncryptionPubKeyDigest") == _base64_text(
+        keys.certificate_fingerprint(encryption_certificate)
     )
 
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
+from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 
@@ -109,29 +110,63 @@ class Keyring:
 
 @dataclass(frozen=True, slots=True)
 class BankKeys:
-    """The bank's public keys, retrieved over HPB.
+    """The bank's public keys, retrieved over HPB, with the certificates that carried them.
 
     The bank holds its own identification/authentication (X002) and encryption (E002)
-    key pairs; HPB returns their public halves. The subscriber must verify the keys'
-    hashes against the values the bank publishes out of band before trusting them.
+    key pairs; HPB returns their public halves, in EBICS 3.0 as X.509 certificates. The
+    subscriber must verify the keys' hashes against the values the bank publishes out of
+    band before trusting them.
+
+    Every later request names the bank keys it was built for: ``BankPubKeyDigests`` in the
+    header and, for uploads, ``EncryptionPubKeyDigest``. EBICS 3.0 defines those values as
+    the SHA-256 over the certificate in DER form (spec 5.5.1.1.1, 5.6.1.1.1, 11.3.2.2), so
+    the certificates are kept here. A key the bank still delivers without a certificate,
+    carried over from EBICS 2.x, is named by the hash of the public key instead (spec
+    11.3.2.2); its certificate field stays ``None``.
 
     Attributes:
         authentication: The bank's X002 identification and authentication public key.
         encryption: The bank's E002 encryption public key.
+        authentication_certificate: The X.509 certificate HPB delivered for the X002 key,
+            or ``None`` when the bank sent a bare key.
+        encryption_certificate: The X.509 certificate HPB delivered for the E002 key, or
+            ``None`` when the bank sent a bare key.
+
+    Raises:
+        TypeError: a key is not an RSA public key, or a certificate is not an
+            :class:`cryptography.x509.Certificate`.
+        ValueError: a certificate does not hold the public key it is given for.
     """
 
     authentication: rsa.RSAPublicKey
     encryption: rsa.RSAPublicKey
+    authentication_certificate: x509.Certificate | None = None
+    encryption_certificate: x509.Certificate | None = None
 
     def __post_init__(self) -> None:
-        for field_name, value in (
-            ("authentication", self.authentication),
-            ("encryption", self.encryption),
+        for field_name, value, certificate in (
+            ("authentication", self.authentication, self.authentication_certificate),
+            ("encryption", self.encryption, self.encryption_certificate),
         ):
             if not isinstance(value, rsa.RSAPublicKey):
                 raise TypeError(
                     f"{field_name} must be an RSA public key, got {type(value).__name__}"
                 )
+            if certificate is None:
+                continue
+            if not isinstance(certificate, x509.Certificate):
+                raise TypeError(
+                    f"{field_name}_certificate must be an x509.Certificate or None, got "
+                    f"{type(certificate).__name__}"
+                )
+            certified_key = certificate.public_key()
+            if (
+                not isinstance(certified_key, rsa.RSAPublicKey)
+                or certified_key.public_numbers() != value.public_numbers()
+            ):
+                # The digest sent to the bank is computed over this certificate; a certificate
+                # for another key would name a key the bank does not hold under this subscriber.
+                raise ValueError(f"{field_name}_certificate does not certify the {field_name} key")
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,9 +177,19 @@ class BankKeyHashes:
     the values the bank publishes out of band). The caller persists these two hashes wherever
     it likes — they are public values, not secrets — and passes them back to pin a later HPB.
 
+    Each value is a raw 32-byte SHA-256 digest in either form a bank publishes for a key: the
+    hash of the public key itself (the EBICS 2.x ``exponent modulus`` form, which
+    :func:`~ebicsclient.public_key_hash` and :func:`~ebicsclient.bank_key_hashes` compute and
+    banks print for the key-based "mit Schlüsseln" profile), or the hash of the key's X.509
+    certificate in DER form (what EBICS 3.0 means by the hash value of a key, spec 5.5.1.1.1
+    and glossary; :func:`~ebicsclient.certificate_fingerprint` computes it). HPB pinning
+    compares a value with both forms of the delivered key; a key the bank delivers without a
+    certificate (spec 11.3.2.2) matches the public-key form only. For a published
+    hexadecimal value use ``bytes.fromhex(hash_text.replace(" ", ""))``.
+
     Attributes:
-        authentication: The SHA-256 EBICS hash of the bank's X002 authentication key.
-        encryption: The SHA-256 EBICS hash of the bank's E002 encryption key.
+        authentication: The SHA-256 hash of the bank's X002 authentication key, in either form.
+        encryption: The SHA-256 hash of the bank's E002 encryption key, in either form.
     """
 
     authentication: bytes

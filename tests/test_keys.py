@@ -241,6 +241,25 @@ def test_bank_key_hashes_are_derived_independently_per_key() -> None:
     assert hashes.authentication != hashes.encryption  # distinct keys → distinct hashes
 
 
+def test_bank_key_hashes_pin_the_public_keys_even_when_certificates_are_kept() -> None:
+    # Pinning compares the public-key hash a bank publishes (ZKB's "mit Schlüsseln" value);
+    # the certificates HPB delivers change what requests digest, not what pinning compares.
+    bank = keys.generate_keyring()
+    bank_keys = BankKeys(
+        authentication=bank.authentication.public_key(),
+        encryption=bank.encryption.public_key(),
+        authentication_certificate=keys.generate_self_signed_certificate(
+            bank.authentication, "BANK", keys.CertificateUsage.AUTHENTICATION
+        ),
+        encryption_certificate=keys.generate_self_signed_certificate(
+            bank.encryption, "BANK", keys.CertificateUsage.ENCRYPTION
+        ),
+    )
+    assert keys.bank_key_hashes(bank_keys) == keys.bank_key_hashes(
+        BankKeys(authentication=bank_keys.authentication, encryption=bank_keys.encryption)
+    )
+
+
 def test_self_signed_certificate_wraps_the_public_key(keyring: Keyring) -> None:
     certificate = keys.generate_self_signed_certificate(
         keyring.signature, "USER1", keys.CertificateUsage.SIGNATURE

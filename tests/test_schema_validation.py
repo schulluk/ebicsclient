@@ -94,18 +94,38 @@ def test_hia_order_data_validates_against_the_orders_schema(
     _assert_valid(_schema("ebics_orders_H005.xsd"), order_data)
 
 
-def _bank_keys(bank_keyring: Keyring) -> BankKeys:
+def _bank_keys(bank_keyring: Keyring, *, with_certificates: bool = False) -> BankKeys:
+    # With certificates the requests digest the certificates' DER (spec 5.5.1.1.1); without
+    # them (a key carried over from EBICS 2.x) they digest the public key (spec 11.3.2.2).
+    if not with_certificates:
+        return BankKeys(
+            authentication=bank_keyring.authentication.public_key(),
+            encryption=bank_keyring.encryption.public_key(),
+        )
     return BankKeys(
         authentication=bank_keyring.authentication.public_key(),
         encryption=bank_keyring.encryption.public_key(),
+        authentication_certificate=keys.generate_self_signed_certificate(
+            bank_keyring.authentication, "BANK", keys.CertificateUsage.AUTHENTICATION
+        ),
+        encryption_certificate=keys.generate_self_signed_certificate(
+            bank_keyring.encryption, "BANK", keys.CertificateUsage.ENCRYPTION
+        ),
     )
 
 
+@pytest.mark.parametrize("with_certificates", [False, True])
 def test_download_initialisation_request_validates(
-    bank: Bank, user: User, keyring: Keyring
+    with_certificates: bool, bank: Bank, user: User, keyring: Keyring
 ) -> None:
+    # Both digest forms must fit PubKeyDigestType (DigestType = base64Binary, plus the
+    # Algorithm and Version attributes): the certificate hash and the public-key hash.
     request = h005.build_download_initialisation_request(
-        bank, user, keyring, _bank_keys(keys.generate_keyring()), CAMT_053
+        bank,
+        user,
+        keyring,
+        _bank_keys(keys.generate_keyring(), with_certificates=with_certificates),
+        CAMT_053,
     )
     _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
 
@@ -155,12 +175,18 @@ def test_admin_download_request_validates(
     _assert_valid(_schema("ebics_request_H005.xsd"), etree.fromstring(request))
 
 
+@pytest.mark.parametrize("with_certificates", [False, True])
 @pytest.mark.parametrize("btf", [PAIN_001, PAIN_001_CGI, experimental.PAIN_001_SEPA])
 def test_upload_initialisation_request_validates_except_the_signature_flag(
-    btf: BusinessTransactionFormat, bank: Bank, user: User, keyring: Keyring
+    btf: BusinessTransactionFormat,
+    with_certificates: bool,
+    bank: Bank,
+    user: User,
+    keyring: Keyring,
 ) -> None:
-    # PAIN_001_CGI adds a ServiceOption and PAIN_001_SEPA drops the Scope: both shapes must hold.
-    bank_keys = _bank_keys(keys.generate_keyring())
+    # PAIN_001_CGI adds a ServiceOption and PAIN_001_SEPA drops the Scope: both shapes must hold,
+    # with the bank keys named by certificate hash and by public-key hash alike.
+    bank_keys = _bank_keys(keys.generate_keyring(), with_certificates=with_certificates)
     payload = h005.prepare_upload(user, keyring, bank_keys, b"<Document>pay</Document>")
     request = h005.build_upload_initialisation_request(
         bank, user, keyring, bank_keys, btf, payload

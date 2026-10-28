@@ -1,5 +1,6 @@
 """Tests for ebicsclient.client: INI/HIA orchestration with a fake transport."""
 
+import base64
 import datetime
 import io
 import logging
@@ -42,6 +43,7 @@ from ebicsclient.models import (
     CAMT_053,
     PAIN_001,
     Bank,
+    BankKeyHashes,
     BankKeys,
     BusinessTransactionFormat,
     DateRange,
@@ -836,10 +838,81 @@ def test_available_order_types_runs_the_haa_admin_download(
     assert opened.findtext(f".//{{{_NS}}}AdminOrderType") == "HAA"
 
 
+def test_hpb_keeps_the_bank_certificates_and_later_requests_name_them_by_der_hash(
+    keyring: Keyring,
+) -> None:
+    # The client wires the HPB certificates through to every later request: spec 5.5.1.1.1
+    # defines BankPubKeyDigests as the SHA-256 of the bank certificates in DER form.
+    bank_keyring = keys.generate_keyring()
+    client, transport = _client_after_hpb(keyring, bank_keyring, bare_keys=False)
+    bank_keys = client.bank_keys
+    assert bank_keys is not None
+    assert bank_keys.authentication_certificate is not None
+    assert bank_keys.encryption_certificate is not None
+    client.subscriber_info()
+    digests = etree.fromstring(transport.posts[1]).find(f".//{{{_NS}}}BankPubKeyDigests")
+    assert digests is not None
+    assert digests.findtext(f"{{{_NS}}}Authentication") == _base64_text(
+        keys.certificate_fingerprint(bank_keys.authentication_certificate)
+    )
+    assert digests.findtext(f"{{{_NS}}}Encryption") == _base64_text(
+        keys.certificate_fingerprint(bank_keys.encryption_certificate)
+    )
+
+
+def test_hpb_without_certificates_makes_later_requests_name_the_keys_by_public_key_hash(
+    keyring: Keyring,
+) -> None:
+    # Spec 11.3.2.2: a bank key carried over from EBICS 2.x without a certificate keeps the
+    # hash over the public key, so a bare HPB key must not break every later request.
+    bank_keyring = keys.generate_keyring()
+    client, transport = _client_after_hpb(keyring, bank_keyring, bare_keys=True)
+    bank_keys = client.bank_keys
+    assert bank_keys is not None
+    assert bank_keys.authentication_certificate is None
+    assert bank_keys.encryption_certificate is None
+    client.subscriber_info()
+    digests = etree.fromstring(transport.posts[1]).find(f".//{{{_NS}}}BankPubKeyDigests")
+    assert digests is not None
+    assert digests.findtext(f"{{{_NS}}}Authentication") == _base64_text(
+        keys.public_key_hash(bank_keys.authentication)
+    )
+    assert digests.findtext(f"{{{_NS}}}Encryption") == _base64_text(
+        keys.public_key_hash(bank_keys.encryption)
+    )
+
+
+def _client_after_hpb(
+    keyring: Keyring, bank_keyring: Keyring, *, bare_keys: bool
+) -> tuple[Client, _QueueTransport]:
+    # A client that ran HPB against the fake bank and has an HTD answer queued next.
+    order_data = (Path(__file__).parent / "data" / "htd_zkb_sample.xml").read_bytes()
+    transport = _QueueTransport(
+        [
+            make_hpb_response(keyring, bank_keyring, bare_keys=bare_keys),
+            *make_download_responses(
+                keyring, order_data, bank_keyring=bank_keyring, num_segments=1
+            ),
+        ]
+    )
+    client = Client(
+        Bank(host_id="HOST", url="https://example.com/ebicsweb"),
+        User(partner_id="PARTNER1", user_id="USER1"),
+        keyring,
+        transport=transport,  # type: ignore[arg-type]
+    )
+    client.hpb()
+    return client, transport
+
+
+def _base64_text(digest: bytes) -> str:
+    return base64.b64encode(digest).decode("ascii")
+
+
 def test_hpb_pinning_accepts_matching_bank_keys(keyring: Keyring) -> None:
     bank_keyring = keys.generate_keyring()
     client, _ = _client(make_hpb_response(keyring, bank_keyring), keyring)
-    # Pin to the correct hashes (as a caller would after a first, trusted HPB).
+    # Pin to the correct public-key hashes (as a caller would after a first, trusted HPB).
     pinned = keys.bank_key_hashes(
         BankKeys(
             authentication=bank_keyring.authentication.public_key(),
@@ -865,6 +938,110 @@ def test_hpb_pinning_rejects_changed_bank_keys(keyring: Keyring) -> None:
     with pytest.raises(BankKeyMismatchError):
         client.hpb(pinned=pinned)
     assert client.bank_keys is None  # a mismatch never caches the keys
+
+
+def test_hpb_pinning_accepts_the_published_certificate_hashes(keyring: Keyring) -> None:
+    # EBICS 3.0 banks publish the SHA-256 of each bank certificate in DER form (spec 4.6.2,
+    # 5.5.1.1.1, glossary); that value must pin an HPB as well as the public-key hash does.
+    bank_keyring = keys.generate_keyring()
+    client, _ = _client(make_hpb_response(keyring, bank_keyring), keyring)
+    bank_keys = client.hpb(pinned=_published_certificate_hashes(bank_keyring))
+    assert client.bank_keys is bank_keys
+    assert bank_keys.authentication_certificate is not None
+
+
+def test_hpb_pinning_accepts_the_hash_of_a_ca_issued_bank_certificate(keyring: Keyring) -> None:
+    # The pinned certificate hash is compared with the certificate HPB delivered, whoever
+    # issued it (the "mit Zertifikaten" profile), not with a regenerated self-signed one.
+    bank_keyring = keys.generate_keyring()
+    ca_key, ca_certificate = make_ca()
+    certificates = {
+        usage: issue_certificate(ca_key, ca_certificate, private_key.public_key(), usage)
+        for usage, private_key in (
+            (CertificateUsage.AUTHENTICATION, bank_keyring.authentication),
+            (CertificateUsage.ENCRYPTION, bank_keyring.encryption),
+        )
+    }
+    response = make_hpb_response(keyring, bank_keyring, certificates=certificates)
+    client, _ = _client(response, keyring)
+    pinned = BankKeyHashes(
+        authentication=keys.certificate_fingerprint(certificates[CertificateUsage.AUTHENTICATION]),
+        encryption=keys.certificate_fingerprint(certificates[CertificateUsage.ENCRYPTION]),
+    )
+    with pytest.raises(BankKeyMismatchError):
+        # The self-signed certificates' hashes name certificates this bank never sent.
+        client.hpb(pinned=_published_certificate_hashes(bank_keyring))
+    assert client.hpb(pinned=pinned) is client.bank_keys
+
+
+def test_hpb_pinning_takes_each_value_in_either_published_form(keyring: Keyring) -> None:
+    # Every pinned value is compared on its own, so the two keys may be pinned in different
+    # forms — a stored public-key hash next to a certificate hash copied from the bank.
+    bank_keyring = keys.generate_keyring()
+    client, _ = _client(make_hpb_response(keyring, bank_keyring), keyring)
+    pinned = BankKeyHashes(
+        authentication=_published_certificate_hashes(bank_keyring).authentication,
+        encryption=keys.public_key_hash(bank_keyring.encryption.public_key()),
+    )
+    assert client.hpb(pinned=pinned) is client.bank_keys
+
+
+def test_hpb_pinning_rejects_another_banks_certificate_hashes(keyring: Keyring) -> None:
+    bank_keyring = keys.generate_keyring()
+    client, _ = _client(make_hpb_response(keyring, bank_keyring), keyring)
+    with pytest.raises(BankKeyMismatchError, match="X002"):
+        client.hpb(pinned=_published_certificate_hashes(keys.generate_keyring()))
+    assert client.bank_keys is None
+
+
+def test_hpb_pinning_rejects_one_wrong_value_among_two(keyring: Keyring) -> None:
+    # A matching X002 value must not carry a wrong E002 value: both keys must match.
+    bank_keyring = keys.generate_keyring()
+    client, _ = _client(make_hpb_response(keyring, bank_keyring), keyring)
+    pinned = BankKeyHashes(
+        authentication=_published_certificate_hashes(bank_keyring).authentication,
+        encryption=_published_certificate_hashes(keys.generate_keyring()).encryption,
+    )
+    with pytest.raises(BankKeyMismatchError, match="E002"):
+        client.hpb(pinned=pinned)
+    assert client.bank_keys is None
+
+
+def test_hpb_pinning_of_bare_keys_matches_only_the_public_key_hash(keyring: Keyring) -> None:
+    # A key the bank delivers without a certificate (spec 11.3.2.2) has no certificate hash:
+    # the hash of the certificate the bank could have sent for it must not match.
+    bank_keyring = keys.generate_keyring()
+    client, _ = _client(make_hpb_response(keyring, bank_keyring, bare_keys=True), keyring)
+    with pytest.raises(BankKeyMismatchError, match="without a certificate"):
+        client.hpb(pinned=_published_certificate_hashes(bank_keyring))
+    assert client.bank_keys is None
+    pinned = keys.bank_key_hashes(
+        BankKeys(
+            authentication=bank_keyring.authentication.public_key(),
+            encryption=bank_keyring.encryption.public_key(),
+        )
+    )
+    bank_keys = client.hpb(pinned=pinned)
+    assert bank_keys.authentication_certificate is None
+    assert client.bank_keys is bank_keys
+
+
+def _published_certificate_hashes(bank_keyring: Keyring) -> BankKeyHashes:
+    # What a bank publishes for its certificates: the SHA-256 over the DER of the self-signed
+    # certificates the fixture bank sends over HPB. They are deterministic, so they are
+    # regenerated here from the keys alone rather than read out of the HPB response.
+    return BankKeyHashes(
+        authentication=keys.certificate_fingerprint(
+            keys.generate_self_signed_certificate(
+                bank_keyring.authentication, "BANK", CertificateUsage.AUTHENTICATION
+            )
+        ),
+        encryption=keys.certificate_fingerprint(
+            keys.generate_self_signed_certificate(
+                bank_keyring.encryption, "BANK", CertificateUsage.ENCRYPTION
+            )
+        ),
+    )
 
 
 def test_make_ini_letter_renders_html(keyring: Keyring) -> None:
