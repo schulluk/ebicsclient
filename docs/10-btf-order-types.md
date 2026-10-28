@@ -36,6 +36,13 @@ acknowledgement (HAC) shows the bank rejected both in its signature check with `
 IncorrectFileStructure. The same SEPA file was processed under `XE2` and under `XCT`, so at
 ZKB a SEPA payment (payment type S) goes through `PAIN_001` or `PAIN_001_CGI`.
 
+The test platform's manual (version 2.1.1, sections 2.2.1 and 3.7.4) gives the likely reason
+for the rejection. It assigns each pain.001 order type its own schema: `XE2` the CH schema
+(`pain.001.001.09.ch.03`), `XCT` the ISO schema (`pain.001.001.09`) and `CCT` the DK schema
+of the German banking industry (`pain.001.003.03` or `pain.001.003.09`, SEPA payments only).
+The file uploaded under `SCT` declared the ISO namespace `pain.001.001.09`. A file in the DK
+schema has not been tried under `SCT`.
+
 ## Downloads
 
 | 2.5 type | Description | ServiceName | Scope | ServiceOption | MsgName | Version | Container |
@@ -75,7 +82,7 @@ Each constant is the row above, checked against the bank's HTD registry
 | --- | --- | --- |
 | XE2 v09 | `PAIN_001` | payment submission |
 | XCT v09 | `PAIN_001_CGI` | payment submission in the original ISO schema; the test platform accepts only SEPA payments (type S) in it |
-| CCT v09 | `experimental.PAIN_001_SEPA` | experimental: accepted by the test platform, never processed |
+| CCT v09 | `experimental.PAIN_001_SEPA` | experimental: a `pain.001.001.09` file was accepted by the test platform, never processed; the manual assigns this order type the DK schema |
 | Z01 v10 | `PAIN_002` | payment status reports |
 | Z01 v10, with the ZIP container | `PAIN_002_ZIP` | payment status reports as PostFinance registers the tuple; ZKB refuses it ([docs/14](14-postfinance-test-platform.md)) |
 | Z52 v08 | `CAMT_052` | intraday report |

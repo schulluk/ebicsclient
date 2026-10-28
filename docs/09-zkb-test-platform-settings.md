@@ -185,6 +185,14 @@ processing. The customer acknowledgement (HAC, below) names the reason: under bo
 tuples the bank's signature check ended in `TD03` IncorrectFileStructure, so the same file the
 `MCT` channels accepted counts as malformed on the `SCT` channel.
 
+The manual points to the likely cause. Its steps for EBICS uploads (section 3.7.4) assign each
+pain.001 order type a schema: `XE2` the CH schema, `XCT` the ISO schema and `CCT` the **DK
+schema**, the German banking industry's format, which section 2.2.1 gives as
+`pain.001.003.03` or `pain.001.003.09` and admits for SEPA payments (payment type S) only.
+All four copies of the SEPA file declared the ISO namespace `pain.001.001.09`. That would
+explain the `TD03`, but a file in the DK schema has not been tried under `SCT`, so this rests
+on the manual, not on a test.
+
 ## Recovery (2026-10-27)
 
 The platform supports recovery (HPD `Recovery supported="true"`). Probed with raw requests:
