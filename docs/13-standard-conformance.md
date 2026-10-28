@@ -11,8 +11,9 @@ absent, not excluded — unless the **Notes** say otherwise.
 ## Legend
 
 - **Support** — ✅ implemented · 🟡 partial (see Notes) · ❌ not implemented.
-- **Rule** — **Mandated** (the standard defines the behaviour) or **Bank-dependent** (the
-  standard leaves the outcome to the financial institution).
+- **Rule** — **Mandated** (the standard defines the behaviour), **Bank-dependent** (the
+  standard leaves the outcome to the financial institution) or **Recommended** (an annex
+  advises it without imposing it).
 - **Verification** (supported rows only) — the strongest oracle passed; blank for
   unimplemented rows:
   - **live** — validated in a real bank exchange.
@@ -40,7 +41,17 @@ absent, not excluded — unless the **Notes** say otherwise.
 | HCA — change the authentication + encryption keys | Mandated | ✅ | live | `change_keys(…, KeyRotation.AUTHENTICATION_AND_ENCRYPTION)` (see PUB) |
 | HCS — change all three subscriber keys at once | Mandated | ✅ | live | `change_keys(…, KeyRotation.ALL)` (see PUB) |
 | SPR — suspend / lock the subscriber's access | Mandated | ✅ | live | `suspend_access()`, e.g. on suspected key compromise (spec 4.5.1). ZKB suspended the test subscriber at once and returned an order ID; INI and HIA with new keys then brought it back without a reset. A lost answer leaves the outcome open and is not repeated automatically; a refused repeat (`061001` at ZKB) does not prove the first one worked |
+| Key lengths within the spec's bounds: 2048 to 4096 bits for the A006 key, 2048 bits to 16 Kbit for X002, E002 and the bank's keys | Mandated | 🟡 | tests | The lower bound is enforced: `generate_keyring` and `rotate_keyring` refuse a size below 2048 bits, and HPB refuses a shorter bank key. No upper bound is checked. One `key_size` applies to all three keys, so a size above 4096 bits yields a signature key outside the A006 range (spec 14.1); X002 and E002 may have up to 16 Kbit (spec 4.7, 11.1.1, 11.3.2.1), and a longer bank key is accepted. The default, 2048 bits, is within every bound |
+| A005 electronic signature (RSASSA-PKCS1-v1_5) | Bank-dependent | ❌ | | The client signs with A006 only. A bank must support A005 or A006 (spec 11.2.1), so a bank that offers A005 alone cannot be used. ZKB and PostFinance both offer A006 |
+| Private keys in a certified key store, such as a PKCS#11 token or an HSM | Recommended | ❌ | | The TLS and KMS annex of 2026-03-20 asks for certified keys or certified key stores, for instance through PKCS#11, at least for keys that give authorising signatures: an ES of class E, A or B, and EDS. For EBICS 2.x and 3.x it recommends this without imposing it; with EBICS 4.0 it is planned to become mandatory. The library holds the three private keys in process memory and stores them in the passphrase-encrypted keyring file (`save_keyring`); it has no PKCS#11 or HSM integration. `CertificateProvider` can draw certificates from such a store, but not the private keys |
 | H3K — one-step CA-certificate initialisation | Mandated (optional) | ❌ | | CA profile only; not a priority |
+
+## Request header
+
+| Capability | Rule | Support | Verification | Notes |
+|---|---|---|---|---|
+| Technical subscriber — `SystemID` (multi-user customer system) | Mandated (optional) | ❌ | | A customer system that serves several subscribers through one server acts as a technical subscriber: it puts its own ID in `SystemID` and signs each request's `AuthSignature` with its own key (spec 3.7). `SystemID` must be present in such a multi-user system (spec 5.5.1.1.1, 5.6.1.1.1). Not implemented: every subscriber authenticates with its own X002 key, as in a single-user system, and `SystemID` is never sent. HAC reports a `SystemID` the bank logged (`system_id`) |
+| `Product` — the customer software, named in the request header | Mandated (optional) | ❌ | | Optional information on the customer product (spec 5.5.1.1.1, 5.6.1.1.1); never sent |
 
 ## Read — downloads
 
@@ -49,9 +60,12 @@ absent, not excluded — unless the **Notes** say otherwise.
 | BTD download transaction (initialise → transfer → receipt) | Mandated | ✅ | live | |
 | Order-data decryption (RSA-unwrap + AES-128-CBC + inflate) | Mandated | ✅ | live | |
 | Response `AuthSignature` verification on every response | Mandated | ✅ | live | |
+| ↳ a response that fails verification ends the transaction | Mandated | 🟡 | | If the response's `AuthSignature` cannot be verified, the customer system MUST abort the transaction (spec 3.8). The client never uses such a response, but it treats it as a lost answer and repeats the step, after the initialisation, in downloads, uploads and key changes alike. It raises once the transaction's `recovery_attempts` (default 2) are spent. `Client(recovery_attempts=0)` aborts at once |
 | Fail-closed on every return code; unknown codes never masked | Mandated | ✅ | live | |
 | Multi-segment order data | Mandated | ✅ | live | |
+| ↳ the bank's segment signals: an early `lastSegment`, a segment above 1 MB | Mandated (SHOULD) | 🟡 | | Spec 7.2 leaves these irregularities in a download to the client. The client requests exactly the `NumSegments` the initialisation announced and ignores `lastSegment`: if the bank marks an earlier segment as the last one, the client still requests the rest, where it SHOULD continue with the receipt. A segment above 1 MB is accepted, where the client SHOULD end the transaction |
 | Positive receipt (consume) / negative receipt (keep) | Mandated | ✅ | live / XSD+spec | |
+| ↳ the bank's answer checked against the receipt sent | Mandated | 🟡 | | The bank answers a positive receipt with `011000` `EBICS_DOWNLOAD_POSTPROCESS_DONE` and a negative one with `011001` `EBICS_DOWNLOAD_POSTPROCESS_SKIPPED` (spec 5.6.1.2.2; Annex 1). The client accepts either code, or `000000`, after either receipt. A positive receipt answered with `011001` (data left undelivered, so it may come again) and a negative one answered with `011000` (data marked delivered) both pass silently. ZKB answers a positive receipt with `011000` (live); its answer to a negative one is not recorded |
 | Acknowledge only after decrypt+validate (no consume-on-error) | Mandated | ✅ | spec + tests | |
 | Non-consuming read (`ReceiptPolicy.KEEP`) | Mandated | ✅ | XSD + spec | Deliberate negative ack |
 | Fetch statements/reports for a specific date range — BTD `DateRange` (inclusive) | Mandated | ✅ | live | The library sends the range; out-of-range data fails closed (`DateRangeMismatchError`), never returned as a match |
@@ -104,6 +118,7 @@ authorised outside EBICS.
 | HVT — download an order's transaction data | Mandated (optional) | ❌ | |
 | HVE — add an electronic signature to a pending order | Mandated (optional) | ❌ | |
 | HVS — cancel a pending order | Mandated (optional) | ❌ | |
+| BTU `SignatureFlag@requestEDS` — hand an order that lacks signatures to the EDS | Mandated (optional) | ❌ | With the attribute, an upload whose signatures do not suffice waits in the EDS for more, added with HVE; without it, the bank rejects the order (spec 3.12, 3.14). Never sent |
 | Validate the full quorum workflow | Mandated (optional) | ❌ | Not built; validating it needs a bank profile with several required signatures (no such test setup yet) |
 
 ## Out of scope (deliberate)
