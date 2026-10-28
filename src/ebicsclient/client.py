@@ -1149,18 +1149,23 @@ class Client:
 
     def download_payment_status_reports(
         self,
+        btf: BusinessTransactionFormat = PAIN_002,
         *,
         date_range: DateRange | None = None,
         receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE,
     ) -> list[PaymentStatusReport]:
         """Download the pain.002 payment status reports and parse them.
 
-        A convenience over :meth:`download` for the common case: it fetches
-        ``PSR/pain.002`` and returns the parsed reports — the bank's verdicts on
-        previously uploaded pain.001 files, including per-transaction rejections.
-        The bank's keys must already be available (call :meth:`hpb` first).
+        A convenience over :meth:`download` for ``PSR/pain.002``: it fetches the reports —
+        the bank's verdicts on previously uploaded pain.001 files, including per-transaction
+        rejections — and returns them parsed. Banks register this BTF differently: ZKB
+        without a container (``PAIN_002``, the default), PostFinance with the ZIP container
+        (``PAIN_002_ZIP``); each refuses the other form with ``091005``, and the bank's HTD
+        registry (:meth:`subscriber_info`) shows which one it holds. The bank's keys must
+        already be available (call :meth:`hpb` first).
 
         Args:
+            btf: The pain.002 Business Transaction Format; defaults to ``PAIN_002``.
             date_range: An optional inclusive reporting period (see :meth:`download`). Unlike
                 the camt downloads, no per-entry range check is applied — a pain.002 carries
                 payment statuses, not dated booking entries.
@@ -1183,7 +1188,7 @@ class Client:
                 un-acknowledged).
         """
         return self._download_parsed(
-            PAIN_002, pain002.parse, date_range=date_range, receipt_policy=receipt_policy
+            btf, pain002.parse, date_range=date_range, receipt_policy=receipt_policy
         )
 
     def upload(self, btf: BusinessTransactionFormat, order_data: bytes) -> str:

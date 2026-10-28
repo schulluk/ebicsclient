@@ -2,7 +2,7 @@
 
 A Python client for the **EBICS** banking protocol (EBICS 3.0 / H005):
 download statements and initiate payments over a single, source-available library. Validated
-live against Zürcher Kantonalbank (ZKB).
+live against Zürcher Kantonalbank (ZKB) and the PostFinance test platform.
 
 **Free for personal and other noncommercial use.** Commercial use requires a paid license.
 
@@ -71,7 +71,7 @@ that the bank delivered the requested message version (`VersionPolicy.STRICT`); 
 (pain.001); the bank's log of every EBICS action and its result (HAC); and the bank's
 registered data (HTD/HKD), parameters (HPD) and supported versions (HEV). Interrupted transfers resume within their transaction (EBICS recovery), and an upload
 whose final answer stays lost is reported as unconfirmed, never as safe to retry. Read and
-write are validated live against ZKB. Pure Python (`cryptography`, `lxml`), no PHP/Java
+write are validated live against ZKB and the PostFinance test platform. Pure Python (`cryptography`, `lxml`), no PHP/Java
 sidecar. Not yet built: multi-person signatures (EDS/VEU) and several administrative order
 types. What is implemented but not yet validated against a bank is kept apart in
 `ebicsclient.experimental`.
@@ -112,6 +112,7 @@ decision in [docs/04](https://github.com/schulluk/ebicsclient/blob/main/docs/04-
 | [docs/11-certificate-profiles.md](https://github.com/schulluk/ebicsclient/blob/main/docs/11-certificate-profiles.md) | "mit Schlüsseln" vs "mit Zertifikaten", and the certificate seam |
 | [docs/12-verification-ledger.md](https://github.com/schulluk/ebicsclient/blob/main/docs/12-verification-ledger.md) | Every protocol claim → spec citation → oracle → status; the 2.5→3.0 audit |
 | [docs/13-standard-conformance.md](https://github.com/schulluk/ebicsclient/blob/main/docs/13-standard-conformance.md) | Coverage & gaps: every H005 order type — supported or not, and how far verified |
+| [docs/14-postfinance-test-platform.md](https://github.com/schulluk/ebicsclient/blob/main/docs/14-postfinance-test-platform.md) | The PostFinance test platform: BTF catalogue, behaviour, settings, and what is validated there |
 
 ## Development
 

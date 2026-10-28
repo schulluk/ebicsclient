@@ -380,16 +380,32 @@ PAIN_001_CGI = BusinessTransactionFormat(
     service_option="XCH",
 )
 
-#: The Swiss pain.002.001.10 payment-status-report download (the ZKB ``Z01`` order type).
-#: The bank's own HTD registry lists this BTF as ``PSR / CH / pain.002 / 10`` **without** a
-#: Container — a request carrying ``Container=ZIP`` is rejected with ``091005``, even though
-#: ZKB's human-readable catalogue shows a ZIP column (the *delivered file* is a ZIP; the BTF
-#: registration is container-less). Validated live; see docs/09 and docs/10.
+#: The Swiss pain.002.001.10 payment-status-report download as ZKB registers it (the ZKB
+#: ``Z01`` order type): ``PSR / CH / pain.002 / 10`` **without** a container, although the
+#: delivered file is a ZIP and ZKB's printed catalogue shows a ZIP column. Banks register this
+#: tuple differently: ZKB refuses a request carrying ``Container=ZIP`` with ``091005``, while
+#: PostFinance registers the tuple **with** the ZIP container and refuses this container-less
+#: form with ``091005`` — use ``PAIN_002_ZIP`` there. The bank's HTD registry
+#: (``Client.subscriber_info()``) shows which form it holds. Both validated live; see docs/09,
+#: docs/10 and docs/14.
 PAIN_002 = BusinessTransactionFormat(
     service_name="PSR",
     message_name="pain.002",
     scope="CH",
     message_version="10",
+)
+
+#: The same pain.002.001.10 download with the ZIP container named in the request
+#: (``PSR / CH / pain.002 / 10 / ZIP``), as PostFinance registers it. Pass it to
+#: ``Client.download_payment_status_reports()`` at a bank whose HTD registry carries the
+#: container; ZKB refuses it with ``091005``. Validated live against the PostFinance test
+#: platform; see docs/14.
+PAIN_002_ZIP = BusinessTransactionFormat(
+    service_name="PSR",
+    message_name="pain.002",
+    scope="CH",
+    message_version="10",
+    container="ZIP",
 )
 
 

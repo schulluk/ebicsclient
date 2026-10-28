@@ -62,7 +62,9 @@ simulation of incoming credits. Both are used by
 
 Where this catalogue and the bank's HTD registry disagree, HTD wins. HTD registers
 `PSR / CH / pain.002 / 10` **without** a container (a request with `ZIP` is refused with
-`091005`), and the SEPA `SCT / pain.001` entries **without** the `GLB` scope.
+`091005`), and the SEPA `SCT / pain.001` entries **without** the `GLB` scope. PostFinance
+registers the same pain.002 tuple **with** the container and refuses the container-less form
+([docs/14](14-postfinance-test-platform.md)) — hence the second constant `PAIN_002_ZIP`.
 
 ## Library constants
 
@@ -75,6 +77,7 @@ Each constant is the row above, checked against the bank's HTD registry
 | XCT v09 | `PAIN_001_CGI` | payment submission in the original ISO schema; the test platform accepts only SEPA payments (type S) in it |
 | CCT v09 | `experimental.PAIN_001_SEPA` | experimental: accepted by the test platform, never processed |
 | Z01 v10 | `PAIN_002` | payment status reports |
+| Z01 v10, with the ZIP container | `PAIN_002_ZIP` | payment status reports as PostFinance registers the tuple; ZKB refuses it ([docs/14](14-postfinance-test-platform.md)) |
 | Z52 v08 | `CAMT_052` | intraday report |
 | Z53 v08 | `CAMT_053` | end-of-day statement |
 | Z54 v08 | `CAMT_054` | not delivered in the 2026-10-26 runs; ZKB used the variants below |

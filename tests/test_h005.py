@@ -38,6 +38,7 @@ from ebicsclient.models import (
     PAIN_001,
     PAIN_001_CGI,
     PAIN_002,
+    PAIN_002_ZIP,
     AuthorisationLevel,
     Bank,
     BankKeys,
@@ -773,6 +774,62 @@ def test_every_business_transaction_format_constant_is_registered_at_the_bank(
         if entry.service is not None
     }
     assert btf in permitted
+
+
+def _permitted_services(sample: str) -> set[BusinessTransactionFormat]:
+    order_data = (Path(__file__).parent / "data" / sample).read_bytes()
+    return {
+        entry.service
+        for entry in h005.parse_subscriber_info(order_data).permissions
+        if entry.service is not None
+    }
+
+
+def test_the_pain002_registration_differs_between_zkb_and_postfinance() -> None:
+    # One business transaction, two registrations: ZKB holds PSR/CH/pain.002/10 without a
+    # container, PostFinance with the ZIP container (its HTD of 2026-10-28), and each bank
+    # refuses the other form with 091005. So the library carries both tuples, and the
+    # registry decides which one a caller passes to download_payment_status_reports().
+    zkb = _permitted_services("htd_zkb_sample.xml")
+    postfinance = _permitted_services("htd_postfinance_sample.xml")
+    assert PAIN_002 in zkb
+    assert PAIN_002_ZIP not in zkb
+    assert PAIN_002_ZIP in postfinance
+    assert PAIN_002 not in postfinance
+
+
+def test_the_shared_constants_are_registered_at_postfinance_too() -> None:
+    # The camt tuples and the pain.001 upload are registered identically at both banks;
+    # the ZKB-only variants (XDCI at version 08, XABK, the CGI schema) are not.
+    postfinance = _permitted_services("htd_postfinance_sample.xml")
+    assert {CAMT_052, CAMT_053, CAMT_054, PAIN_001} <= postfinance
+    zkb_only = {CAMT_054_BOOKING_INFORMATION, CAMT_054_COLLECTIVE_DEBITS, PAIN_001_CGI}
+    assert not zkb_only & postfinance
+
+
+def test_parse_subscriber_info_reads_the_postfinance_registry() -> None:
+    order_data = (Path(__file__).parent / "data" / "htd_postfinance_sample.xml").read_bytes()
+    info = h005.parse_subscriber_info(order_data)
+    assert info.user_status == "1"
+    assert len(info.order_types) == 35
+    assert len(info.permissions) == 35
+    admin_order_types = {entry.admin_order_type for entry in info.order_types}
+    assert {"HAC", "PTK", "HAA", "HKD", "HTD", "HPD", "BTD", "BTU"} <= admin_order_types
+    uploads = [entry for entry in info.permissions if entry.admin_order_type == "BTU"]
+    assert uploads
+    assert all(entry.authorisation_level is AuthorisationLevel.INDIVIDUAL for entry in uploads)
+    xtd = next(
+        entry.service
+        for entry in info.order_types
+        if entry.service is not None and entry.service.message_name == "msc"
+    )
+    assert xtd == BusinessTransactionFormat(
+        service_name="OTH",
+        message_name="msc",
+        scope="BIL",
+        container="ZIP",
+        service_option="CH002LME",
+    )
 
 
 def _sync_response(phase: str, segment: str | None, code: str = "061101") -> bytes:

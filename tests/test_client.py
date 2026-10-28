@@ -42,6 +42,8 @@ from ebicsclient.keys import CertificateUsage
 from ebicsclient.models import (
     CAMT_053,
     PAIN_001,
+    PAIN_002,
+    PAIN_002_ZIP,
     Bank,
     BankKeyHashes,
     BankKeys,
@@ -681,6 +683,38 @@ def test_download_payment_status_reports_parses_a_pain002_zip(
     assert len(report.rejected_transactions) == 2
     opened = etree.fromstring(transport.posts[0])
     assert opened.findtext(f".//{{{_NS}}}ServiceName") == "PSR"
+
+
+@pytest.mark.parametrize(
+    ("btf", "container"),
+    [(PAIN_002, None), (PAIN_002_ZIP, "ZIP")],
+)
+def test_download_payment_status_reports_requests_the_given_btf(
+    btf: BusinessTransactionFormat,
+    container: str | None,
+    keyring: Keyring,
+    bank_keyring: Keyring,
+) -> None:
+    # Banks register the pain.002 download differently: ZKB without a container, PostFinance
+    # with the ZIP container, and each refuses the other form with 091005. The caller
+    # chooses; the default stays the container-less tuple.
+    document = (Path(__file__).parent / "data" / "pain002_part.xml").read_bytes()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("report.xml", document)
+    responses = make_download_responses(
+        keyring, buffer.getvalue(), bank_keyring=bank_keyring, num_segments=1
+    )
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    (report,) = client.download_payment_status_reports(btf)
+    assert report.group_status == "PART"
+    service = etree.fromstring(transport.posts[0]).find(f".//{{{_NS}}}Service")
+    assert service is not None
+    assert service.findtext(f"{{{_NS}}}ServiceName") == "PSR"
+    assert service.findtext(f"{{{_NS}}}MsgName") == "pain.002"
+    container_element = service.find(f"{{{_NS}}}Container")
+    requested = container_element.get("containerType") if container_element is not None else None
+    assert requested == container
 
 
 def test_upload_requires_hpb_first(keyring: Keyring) -> None:

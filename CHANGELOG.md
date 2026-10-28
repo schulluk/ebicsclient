@@ -59,9 +59,20 @@ and 1.3.1 were never published.
   verified an order's signature. The log is parsed before the receipt; `ReceiptPolicy.KEEP`
   leaves it at the bank. Validated live against the ZKB test platform.
 - Python 3.15 is now supported and tested in CI, like 3.11 to 3.14.
+- BTF constant `PAIN_002_ZIP` (`PSR / CH / pain.002 / 10 / ZIP`): the pain.002 download as
+  PostFinance registers it, with the ZIP container named in the request. ZKB registers the
+  same download without a container (`PAIN_002`), and each bank refuses the other form with
+  `091005`. Validated live against the PostFinance test platform, the second bank test
+  platform the library runs against (docs/14): the handshake, HEV/HPD/HTD/HKD, a pain.001
+  upload and the pain.002, camt.053 and camt.054 downloads all succeeded there.
 
 ### Changed
 
+- `download_payment_status_reports()` takes the pain.002 BTF as its first parameter, like
+  `download_booking_advices()`; the default stays `PAIN_002`. Pass `PAIN_002_ZIP` at a bank
+  whose HTD registry carries the container, such as PostFinance. The `pain002` step of
+  `examples/zkb_handshake.py` asks the bank's HTD registry which form it holds and requests
+  that one.
 - Requests now name the bank's keys the way EBICS 3.0 defines it. `BankPubKeyDigests` in
   every request header and `EncryptionPubKeyDigest` in every upload carry the SHA-256 of the
   bank's X002 and E002 certificates in DER form (spec 5.5.1.1.1, 5.6.1.1.1, 11.3.2.2), as

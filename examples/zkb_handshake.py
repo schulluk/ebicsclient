@@ -14,7 +14,8 @@ Steps, matching the EBICS initialisation ceremony (see docs/05, docs/07):
     hashes     print your own public-key hashes (what the letter certifies)
     download   fetch the EOP/camt.053 statements and print their closing balances
     upload     upload a pain.001 payment file (path in EBICS_UPLOAD_PATH)
-    pain002    fetch the pain.002 payment status report(s) and print them
+    pain002    fetch the pain.002 payment status report(s) in the BTF form the bank's HTD
+               registry holds (with or without the ZIP container) and print them
     haa        list the order types with data available at the bank
     htd        show the subscriber data registered at the bank
     hkd        show the customer data and every subscriber registered at the bank
@@ -71,6 +72,7 @@ from ebicsclient import (
     BankKeyHashes,
     BankKeyMismatchError,
     BankKeys,
+    BusinessTransactionFormat,
     Client,
     InitializationState,
     KeyChangeUnconfirmedError,
@@ -237,7 +239,7 @@ def _pain002() -> int:
 
     client = _build_client()
     _fetch_bank_keys(client)
-    order_data = client.download(PAIN_002)
+    order_data = client.download(_registered_pain002_btf(client))
     print(f"pain.002 download succeeded: {len(order_data)} bytes.")
     # pain.002 comes as a ZIP of status-report XML documents; print each.
     with zipfile.ZipFile(io.BytesIO(order_data)) as archive:
@@ -245,6 +247,36 @@ def _pain002() -> int:
             print(f"----- {name} -----")
             print(archive.read(name).decode("utf-8", errors="replace"))
     return 0
+
+
+def _registered_pain002_btf(client: Client) -> BusinessTransactionFormat:
+    """Return the pain.002 download BTF in the form the bank's HTD registry holds.
+
+    Banks register the same download differently: ZKB as ``PSR / CH / pain.002 / 10``
+    without a container (``PAIN_002``), PostFinance with the ZIP container
+    (``PAIN_002_ZIP``), and each refuses the other form with ``091005``. The registry is
+    the oracle, so ask it instead of guessing; without a matching entry, fall back to
+    ``PAIN_002``.
+    """
+    for entry in client.subscriber_info().permissions:
+        service = entry.service
+        if (
+            service is not None
+            and service.service_name == PAIN_002.service_name
+            and service.message_name == PAIN_002.message_name
+            and service.message_version == PAIN_002.message_version
+        ):
+            print(f"HTD registers the pain.002 download as {_describe(service)}; requesting it.")
+            return service
+    print(f"HTD lists no pain.002 version-10 download; requesting {_describe(PAIN_002)}.")
+    return PAIN_002
+
+
+def _describe(btf: BusinessTransactionFormat) -> str:
+    return (
+        f"{btf.service_name}/{btf.scope or '-'}/{btf.service_option or '-'}/{btf.message_name}"
+        f" v{btf.message_version or '-'} container={btf.container or '-'}"
+    )
 
 
 def _haa() -> int:
