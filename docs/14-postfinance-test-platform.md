@@ -329,8 +329,8 @@ QRR mit SCOR* off).
 | Handshake INI/HIA | mit Schlüsseln profile | `client.ini()`, `client.hia()` | ✅ live (both `SUBMITTED`, 2026-10-28) |
 | HPB with pinned hashes | EBICS-Daten page | `client.hpb(pinned=…)` | ✅ live (both hashes match, 2026-10-28; the keys arrive as certificates) |
 | HEV, HPD, HTD, HKD, HAA | — | `supported_versions()`, `bank_parameters()`, `subscriber_info()`, `customer_info()`, `available_order_types()` | ✅ live (2026-10-28, with the certificate-DER `BankPubKeyDigests`) |
-| End-of-day statement download | `EOP / CH / camt.053 / 08 / ZIP` | `download_statements()` | ✅ live (2026-10-28, two runs: balances reconcile, one collective debit per payment block) |
-| Intraday report | `STM / CH / camt.052 / 08 / ZIP` | `download_intraday_statements()` | ⏳ needs *Intraday-Kontobewegungen* enabled |
+| End-of-day statement download | `EOP / CH / camt.053 / 08 / ZIP` | `download_statements()` | ✅ live (2026-10-28, three runs: balances reconcile, one collective debit per payment block; the third fetched with the explicit `CAMT_053` argument) |
+| Intraday report | `STM / CH / camt.052 / 08 / ZIP` | `download_intraday_statements()` | ⏳ needs *Intraday-Kontobewegungen* enabled; `download_intraday_statements(CAMT_052)` answered `090005`, so the tuple is registered and merely empty |
 | Booking advices | `REP / CH / camt.054 / 08 / ZIP` (Z54) | `download_booking_advices()` | ✅ live (2026-10-28, two runs: four notifications in version 08, single transactions with references, creditor and remittance text) |
 | pain.001 upload | `MCT / CH / pain.001 / 09` | `client.upload(PAIN_001, …)` | ✅ live (2026-10-28: accepted, processed, booked) |
 | pain.002 back | `PSR / CH / pain.002 / 10 / ZIP` | `download_payment_status_reports(PAIN_002_ZIP)` | ✅ live (2026-10-28, two runs: one report per payment block, `ACCP`) |

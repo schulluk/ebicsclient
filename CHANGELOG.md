@@ -68,11 +68,14 @@ and 1.3.1 were never published.
 
 ### Changed
 
-- `download_payment_status_reports()` takes the pain.002 BTF as its first parameter, like
-  `download_booking_advices()`; the default stays `PAIN_002`. Pass `PAIN_002_ZIP` at a bank
-  whose HTD registry carries the container, such as PostFinance. The `pain002` step of
-  `examples/zkb_handshake.py` asks the bank's HTD registry which form it holds and requests
-  that one.
+- Every typed download takes its BTF as the first parameter, as `download_booking_advices()`
+  already did: `download_statements()` (default `CAMT_053`), `download_intraday_statements()`
+  (default `CAMT_052`) and `download_payment_status_reports()` (default `PAIN_002`). The
+  Swiss constants are defaults only; a bank that registers a statement or report under
+  another scope, option, version or container takes that tuple, which its HTD registry
+  shows. Pass `PAIN_002_ZIP` at a bank whose registry carries the container, such as
+  PostFinance. The `pain002` step of `examples/zkb_handshake.py` asks the bank's HTD
+  registry which form it holds and requests that one.
 - Requests now name the bank's keys the way EBICS 3.0 defines it. `BankPubKeyDigests` in
   every request header and `EncryptionPubKeyDigest` in every upload carry the SHA-256 of the
   bank's X002 and E002 certificates in DER form (spec 5.5.1.1.1, 5.6.1.1.1, 11.3.2.2), as

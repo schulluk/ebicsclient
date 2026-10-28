@@ -464,6 +464,63 @@ def _statement_zip(namespace: str | None) -> bytes:
 _ISO = "urn:iso:std:iso:20022:tech:xsd:"
 
 
+def _report_zip(namespace: str) -> bytes:
+    document = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<Document xmlns="{namespace}"><BkToCstmrAcctRpt>'
+        "<Rpt><Id>RPT-1</Id>"
+        "<Acct><Id><IBAN>CH9300762011623852957</IBAN></Id></Acct>"
+        "</Rpt></BkToCstmrAcctRpt></Document>"
+    ).encode()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("report.xml", document)
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("method", "btf", "order_data"),
+    [
+        (
+            "download_statements",
+            BusinessTransactionFormat(
+                service_name="EOP", message_name="camt.053", scope="DE", message_version="02"
+            ),
+            _statement_zip(f"{_ISO}camt.053.001.02"),
+        ),
+        (
+            "download_intraday_statements",
+            BusinessTransactionFormat(
+                service_name="STM", message_name="camt.052", scope="DE", message_version="02"
+            ),
+            _report_zip(f"{_ISO}camt.052.001.02"),
+        ),
+    ],
+)
+def test_statement_downloads_request_the_given_btf(
+    method: str,
+    btf: BusinessTransactionFormat,
+    order_data: bytes,
+    keyring: Keyring,
+    bank_keyring: Keyring,
+) -> None:
+    # The Swiss constants are defaults only. A bank registers its statements under its own
+    # tuple (scope, option, version, container), which its HTD registry shows, and a typed
+    # download must request exactly that tuple: here one without a container.
+    responses = make_download_responses(keyring, order_data, bank_keyring=bank_keyring)
+    client, transport = _download_client(responses, keyring, _bank_keys(bank_keyring))
+    assert len(getattr(client, method)(btf)) == 1
+    service = etree.fromstring(transport.posts[0]).find(f".//{{{_NS}}}Service")
+    assert service is not None
+    assert service.findtext(f"{{{_NS}}}ServiceName") == btf.service_name
+    assert service.findtext(f"{{{_NS}}}Scope") == "DE"
+    message = service.find(f"{{{_NS}}}MsgName")
+    assert message is not None
+    assert message.text == btf.message_name
+    assert message.get("version") == "02"
+    assert service.find(f"{{{_NS}}}Container") is None
+
+
 def test_strict_download_accepts_the_requested_version(
     keyring: Keyring, bank_keyring: Keyring
 ) -> None:

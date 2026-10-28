@@ -1014,17 +1014,22 @@ class Client:
 
     def download_statements(
         self,
+        btf: BusinessTransactionFormat = CAMT_053,
         *,
         date_range: DateRange | None = None,
         receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE,
     ) -> list[Statement]:
         """Download the end-of-period camt.053 statements and parse them.
 
-        A convenience over :meth:`download` for the common case: it fetches
-        ``EOP/camt.053`` and returns the parsed statements (account, balances, entries).
-        The bank's keys must already be available (call :meth:`hpb` first).
+        A convenience over :meth:`download` for ``EOP/camt.053``: it fetches the statements
+        and returns them parsed (account, balances, entries). The default BTF is the Swiss
+        ``CAMT_053``; a bank that registers its statements under another scope, option,
+        version or container takes that tuple here — its HTD registry
+        (:meth:`subscriber_info`) shows the exact one. The bank's keys must already be
+        available (call :meth:`hpb` first).
 
         Args:
+            btf: The camt.053 Business Transaction Format; defaults to ``CAMT_053``.
             date_range: An optional inclusive reporting period (see :meth:`download`); when
                 given, fetches the statements for that period instead of the default
                 not-yet-delivered data, and every returned entry's booking date is asserted
@@ -1050,7 +1055,7 @@ class Client:
                 un-acknowledged).
         """
         return self._download_parsed(
-            CAMT_053,
+            btf,
             camt053.parse,
             date_range=date_range,
             receipt_policy=receipt_policy,
@@ -1059,6 +1064,7 @@ class Client:
 
     def download_intraday_statements(
         self,
+        btf: BusinessTransactionFormat = CAMT_052,
         *,
         date_range: DateRange | None = None,
         receipt_policy: ReceiptPolicy = ReceiptPolicy.ACKNOWLEDGE,
@@ -1067,10 +1073,13 @@ class Client:
 
         A convenience over :meth:`download` for ``STM/camt.052``. Intraday reports share
         the statement shape; interim balances (if any) are in ``balances`` rather than
-        ``opening_balance``/``closing_balance``. The bank's keys must already be available
-        (call :meth:`hpb` first).
+        ``opening_balance``/``closing_balance``. The default BTF is the Swiss ``CAMT_052``;
+        a bank that registers its reports under another tuple takes that one here (its HTD
+        registry, :meth:`subscriber_info`, shows it). The bank's keys must already be
+        available (call :meth:`hpb` first).
 
         Args:
+            btf: The camt.052 Business Transaction Format; defaults to ``CAMT_052``.
             date_range: An optional inclusive reporting period (see :meth:`download`);
                 returned entries are asserted to fall within it.
             receipt_policy: What to do with the data once received (see
@@ -1093,7 +1102,7 @@ class Client:
                 un-acknowledged).
         """
         return self._download_parsed(
-            CAMT_052,
+            btf,
             camt052.parse,
             date_range=date_range,
             receipt_policy=receipt_policy,

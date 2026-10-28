@@ -86,4 +86,6 @@ Each constant is the row above, checked against the bank's HTD registry
 | ZQR, ZRF, ZS3 | — | collective QRR, SCOR and LSV+ credits; delivered so far only in version 04, so no constant yet |
 
 Until a variant has its own constant, `download_booking_advices` takes any of these tuples as a
-`BusinessTransactionFormat`.
+`BusinessTransactionFormat` — as do `download_statements`, `download_intraday_statements` and
+`download_payment_status_reports` for a bank that registers its statements and reports under
+other tuples than the Swiss constants.
