@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,14 +8,14 @@ version = "1.9.0"
 description = "Pure-Python client for the EBICS 3.0 (H005) banking protocol"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE.md" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Lukas Schulze" }]
 keywords = ["ebics", "banking", "iso20022", "camt", "h005", "fintech"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Financial and Insurance Industry",
-    "License :: Other/Proprietary License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -40,8 +40,7 @@ pdf = ["reportlab"]
 tls = ["certifi"]
 
 [project.urls]
-Homepage = "https://ebicsclient.miniapps.ch"
-Pricing = "https://ebicsclient.miniapps.ch/#pricing"
+Homepage = "https://ebicsclient.ch"
 Repository = "https://github.com/schulluk/ebicsclient"
 Issues = "https://github.com/schulluk/ebicsclient/issues"
 Changelog = "https://github.com/schulluk/ebicsclient/blob/main/CHANGELOG.md"

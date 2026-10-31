@@ -1,12 +1,14 @@
 # ebicsclient — a pure-Python EBICS 3.0 (H005) client
 
 A Python client for the **EBICS** banking protocol (EBICS 3.0 / H005):
-download statements and initiate payments over a single, source-available library. Validated
+download statements and initiate payments over a single, free library. Validated
 live against Zürcher Kantonalbank (ZKB) and the PostFinance test platform.
 
-**Free for personal and other noncommercial use.** Commercial use requires a paid license.
+**Free software under the Apache License 2.0**, written and maintained by one person. It is a
+protocol library, not a financial service, and it comes without warranty: read the License
+section below before it touches a production account.
 
-Website, pricing and FAQ: **[ebicsclient.miniapps.ch](https://ebicsclient.miniapps.ch)**
+Website: **[ebicsclient.ch](https://ebicsclient.ch)**
 
 ## Install
 
@@ -81,9 +83,8 @@ in docs/13 in full plus 6 in part: reads 24 of 28, writes 9 of 13, multi-person 
 missing is optional in the standard, above all EDS, which waits for a test environment
 with several required signatures. If you can provide access to one, please open an
 [issue](https://github.com/schulluk/ebicsclient/issues) or write to the maintainer via
-[ebicsclient.miniapps.ch](https://ebicsclient.miniapps.ch); with it, EDS gets built and
-validated. What is implemented but not yet validated against a bank is kept apart in
-`ebicsclient.experimental`.
+[ebicsclient.ch](https://ebicsclient.ch); with it, EDS gets built and validated. What is
+implemented but not yet validated against a bank is kept apart in `ebicsclient.experimental`.
 
 Full capability-by-capability coverage, gaps, and verification status:
 **[docs/13-standard-conformance.md](https://github.com/schulluk/ebicsclient/blob/main/docs/13-standard-conformance.md)**.
@@ -109,7 +110,7 @@ decision in [docs/04](https://github.com/schulluk/ebicsclient/blob/main/docs/04-
 | Doc | Contents |
 |---|---|
 | [docs/01-protocol-and-formats.md](https://github.com/schulluk/ebicsclient/blob/main/docs/01-protocol-and-formats.md) | EBICS/H005 background, the two regulatory deadlines, message formats |
-| [docs/02-licensing-strategy.md](https://github.com/schulluk/ebicsclient/blob/main/docs/02-licensing-strategy.md) | Dual-licensing plan, legal reasoning, reimplementation |
+| [docs/02-licensing-strategy.md](https://github.com/schulluk/ebicsclient/blob/main/docs/02-licensing-strategy.md) | Licence: Apache-2.0 since 2.0.0; the retired dual-licensing plan, kept as history |
 | [docs/03-library-landscape.md](https://github.com/schulluk/ebicsclient/blob/main/docs/03-library-landscape.md) | Existing EBICS libraries and the gap this library fills |
 | [docs/04-implementation-plan.md](https://github.com/schulluk/ebicsclient/blob/main/docs/04-implementation-plan.md) | Scope, modules, the two hard parts, build order, test strategy |
 | [docs/05-zkb-onboarding.md](https://github.com/schulluk/ebicsclient/blob/main/docs/05-zkb-onboarding.md) | The INI/HIA + signed-letter ceremony, re-initialisation, ZKB order params |
@@ -132,8 +133,30 @@ engineering bar is [docs/06-engineering-conventions.md](https://github.com/schul
 
 ## License
 
-Source-available under the **PolyForm Noncommercial License 1.0.0** — **free for noncommercial
-use**; commercial/business use requires a paid license, see
-[pricing](https://ebicsclient.miniapps.ch/#pricing). See
-[LICENSE.md](https://github.com/schulluk/ebicsclient/blob/main/LICENSE.md) and the
-rationale in [docs/02-licensing-strategy.md](https://github.com/schulluk/ebicsclient/blob/main/docs/02-licensing-strategy.md).
+Copyright © 2026 Lukas Schulze. Licensed under the **Apache License 2.0** since version 2.0.0,
+for any use, commercial or not: see
+[LICENSE](https://github.com/schulluk/ebicsclient/blob/main/LICENSE) and
+[NOTICE](https://github.com/schulluk/ebicsclient/blob/main/NOTICE). Versions up to 1.9.0 were
+published under the PolyForm Noncommercial License 1.0.0; use 2.0.0 or later for the Apache
+terms. The retired paid-licence plan is kept as history in
+[docs/02-licensing-strategy.md](https://github.com/schulluk/ebicsclient/blob/main/docs/02-licensing-strategy.md).
+
+What that means in practice:
+
+- The library is written and maintained by one person. There is no company behind it, no
+  support contract and no service level. Bug reports and questions go to the
+  [issue tracker](https://github.com/schulluk/ebicsclient/issues) and are answered on a
+  best-effort basis.
+- It is a protocol library, not a financial service. It transports the orders and statements
+  you exchange with your bank under your own EBICS contract, and the bank executes what you
+  submit.
+- It comes **without warranty of any kind** and without liability as far as the law allows,
+  as sections 7 and 8 of the licence state. Before it touches a production account, test it
+  against your bank's test platform, keep your bank-side controls in place, such as payment
+  limits and dual authorisation where your bank offers them, and check the bank's status
+  report for every payment you submit.
+- Which banks, test platforms and order types each release has been verified against is
+  recorded in
+  [docs/12](https://github.com/schulluk/ebicsclient/blob/main/docs/12-verification-ledger.md)
+  and [docs/13](https://github.com/schulluk/ebicsclient/blob/main/docs/13-standard-conformance.md).
+  Anything not listed there is untested.

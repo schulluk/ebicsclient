@@ -146,7 +146,7 @@ ships only what a bank has accepted. **Help wanted: if you can provide access to
 test environment with multiple required signatures**, whether a bank test platform, a
 vendor's demo server or a production contract willing to test, please open an
 [issue](https://github.com/schulluk/ebicsclient/issues) or write to the maintainer via
-[ebicsclient.miniapps.ch](https://ebicsclient.miniapps.ch). With such access the order types
+[ebicsclient.ch](https://ebicsclient.ch). With such access the order types
 below will be implemented and validated.
 
 | Order type | Rule | Support | Notes |

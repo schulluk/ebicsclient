@@ -8,6 +8,22 @@ and 1.3.1 were never published.
 
 ## [Unreleased]
 
+### Changed
+
+- **Licence: Apache License 2.0**, for any use, in place of the PolyForm Noncommercial
+  License 1.0.0 with a paid commercial licence. Earlier versions keep the terms they were
+  published under. The major version marks the licence change; the API is the one of 1.9.0.
+  The package metadata carries the licence as an SPDX expression (`Apache-2.0`), the licence
+  files are `LICENSE` and `NOTICE`, and the metadata no longer links a pricing page.
+- The README opens with what the library is and is not: free software written and
+  maintained by one person, a protocol library rather than a financial service, without
+  warranty, to be tested against the bank's test platform before it touches a production
+  account. Its License section says where each release's verification is recorded.
+- [docs/02](docs/02-licensing-strategy.md) keeps the retired dual-licensing plan as history,
+  with a note on why it was retired.
+- The website moved to its own domain, [ebicsclient.ch](https://ebicsclient.ch); the old
+  address redirects there. The README, docs/13 and the project links name the new domain.
+
 ### Added
 
 - Four examples: `07_incoming_payments.py` resolves a collective credit into its single

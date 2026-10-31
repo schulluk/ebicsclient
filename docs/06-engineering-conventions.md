@@ -17,8 +17,8 @@ more explicit, more defensive, more auditable option.
 ---
 
 Baseline practices decided **before** writing code so we don't retrofit them into a mess. They follow the
-project's values: minimal dependencies, security-first (this is a banking client), licensing hygiene for the
-source-available/commercial model, and scope discipline. **[now]** = cheap and painful to retrofit, do it
+project's values: minimal dependencies, security-first (this is a banking client), licensing hygiene
+(permissive dependencies only, so the Apache-2.0 grant holds for every user), and scope discipline. **[now]** = cheap and painful to retrofit, do it
 with the first code; **[soon]** = add as the surface grows.
 
 ## Packaging & layout
@@ -232,6 +232,7 @@ such a test goes into `ebicsclient.experimental` instead:
 ## Versioning, changelog, CI
 
 - SemVer. `CHANGELOG.md` (Keep a Changelog format). Keep the README "Status" current (per CLAUDE.md).
-- Dual-license `LICENSE` with SPDX headers (doc 02).
+- `LICENSE` is the Apache License 2.0 since 2.0.0 (doc 02); the licence is declared once, as the
+  SPDX expression in `pyproject.toml`, with no per-file headers.
 - Lightweight GitHub Actions: `ruff` + `mypy` + `pytest` across Python 3.11 to 3.15.
   No live-bank calls.

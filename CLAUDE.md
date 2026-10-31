@@ -1,13 +1,14 @@
 # EBICS client library — project instructions
 
-This repo is a **from-scratch, pure-Python EBICS 3.0 (H005) client library**. Source-available,
-dual-licensed (free personal / paid commercial). The library is bank- and app-agnostic; ZKB is the
-first bank targeted for protocol validation.
+This repo is a **from-scratch, pure-Python EBICS 3.0 (H005) client library**. Free software under
+the Apache License 2.0 since 2.0.0 (versions up to 1.9.0 were PolyForm Noncommercial with a paid
+commercial licence; that model was retired on 2026-10-31, see doc 02). The library is bank- and
+app-agnostic; ZKB is the first bank targeted for protocol validation.
 
 ## The bar: this software moves money
 
 This library talks to banks. It reads statements **and initiates payments** — it moves real money — and
-it handles live credentials and account data throughout. **Correctness and security are the product.** A banking library people trust (and pay for) is the entire value proposition;
+it handles live credentials and account data throughout. **Correctness and security are the product.** A banking library people trust is the entire value proposition;
 the moment it feels sloppy, that value is gone.
 
 So **hold every line to a hardened standard from day one** — including the read-only MVP, because shortcuts
@@ -30,7 +31,8 @@ never hardcode or commit them.
 - **Pure Python only.** Crypto via `cryptography`, XML via `lxml`. No PHP/Java sidecar, no `fintech`
   dependency (it's proprietary and gates statement downloads).
 - **Dependency licenses must stay permissive** (BSD/Apache/MIT). Never add a GPL/AGPL dependency —
-  it would poison the source-available/commercial license model. See doc 02.
+  copyleft would contradict the Apache-2.0 grant and keep the library out of the proprietary
+  products where most EBICS integrations live. See doc 02.
 - **Implement from the EBICS spec.** You may read `ebics-client-php` (MIT) as a *behavioral reference*
   to sanity-check crypto/canonicalization, but do **not** copy/translate its code — keep the
   implementation independent so licensing stays unencumbered (doc 02 explains why).

@@ -1,5 +1,15 @@
 # Licensing strategy
 
+> **Superseded on 2026-10-31.** Since version 2.0.0, ebicsclient is free software under the
+> [Apache License 2.0](../LICENSE), for any use, with no commercial licence and no paid services.
+> The paid model below was retired after the first two licence requests: the income it could
+> realistically produce, a few hundred francs a year, did not justify the contractual
+> relationship, the administration and the legal structure that selling software calls for, and
+> a free licence serves the goal this plan was written for, a trustworthy EBICS client that any
+> application can embed. What remains in force from this document: permissive dependencies only,
+> the spec-first implementation that keeps the code unencumbered by other projects' licences, and
+> no DRM or licence keys. Everything else is kept as history.
+
 ## Goal
 
 **Source-available** — ship the full source — but **require a paid license for commercial/business use**.
