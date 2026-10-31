@@ -8,6 +8,8 @@ and 1.3.1 were never published.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-31
+
 ### Changed
 
 - **Licence: Apache License 2.0**, for any use, in place of the PolyForm Noncommercial
@@ -44,6 +46,9 @@ and 1.3.1 were never published.
   with nothing waiting raises `ReturnCodeError` `090005`, which the examples treated as an
   empty list. `04_pay_and_check_status.py status --zip` requests the pain.002 form with the
   ZIP container, as PostFinance registers it.
+
+The library code is unchanged from 1.9.0. The four new examples and the empty-queue path
+ran against the ZKB and PostFinance test platforms without consuming data.
 
 ## [1.9.0] - 2026-10-28
 
@@ -400,7 +405,8 @@ bank-issued), bank-key pinning, statement download (BTD) with camt.053 parsing, 
 upload (BTU) with the A006 electronic signature, an HTTPS transport with a TLS 1.2 floor,
 and an encrypted keyring.
 
-[Unreleased]: https://github.com/schulluk/ebicsclient/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/schulluk/ebicsclient/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/schulluk/ebicsclient/compare/v1.9.0...v2.0.0
 [1.9.0]: https://github.com/schulluk/ebicsclient/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/schulluk/ebicsclient/compare/v1.7.2...v1.8.0
 [1.7.2]: https://github.com/schulluk/ebicsclient/compare/v1.7.1...v1.7.2
